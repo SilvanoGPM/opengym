@@ -24,17 +24,43 @@ const exerciseNamePacks = import.meta.glob('../exercise-names/*.js')
 const subs = new Set()
 const notify = () => { subs.forEach(f => f()) }
 
+/**
+ * Switch language. Resolves as soon as the *interface* is speaking it.
+ *
+ * The three packs are wildly different sizes — for pt-BR the UI strings are 30 kB against 680 kB
+ * of exercise instructions, and hindi's are 1.5 MB — and only the first is on screen at startup.
+ * Waiting for all three before applying any of them left every button, title and tab label in
+ * English until a megabyte of step-by-step text had arrived, which is exactly as long as the app
+ * appeared to be in the wrong language. So the UI pack lands on its own, and the heavy ones
+ * follow without holding anyone up.
+ */
 export async function setLang(l) {
   if (!LANGS[l]) l = 'en'
   if (l === getLang() && getVersion() > 0) return
-  let dict = {}, instr = null, exerciseNames = null
-  try { dict = l === 'en' ? {} : (await localePacks['../locales/' + l + '.js']()).default } catch (e) { dict = {} }
-  try { instr = l === 'en' || !INSTR_LANGS.includes(l) ? null : (await instrPacks['../instr/' + l + '.js']()).default } catch (e) { instr = null }
-  try {
-    exerciseNames = l === 'en' || !EXERCISE_NAME_LANGS.includes(l)
-      ? null
-      : (await exerciseNamePacks['../exercise-names/' + l + '.js']()).default
-  } catch (e) { exerciseNames = null }
+  if (l === 'en') { _setLangState('en', {}, null, null); notify(); return }
+  let dict = {}
+  try { dict = (await localePacks['../locales/' + l + '.js']()).default } catch (e) { dict = {} }
+  _setLangState(l, dict, null, null)
+  notify()
+  loadContentPacks(l, dict)      // deliberately not awaited
+}
+
+/**
+ * Exercise instructions and translated exercise names, fetched after the interface has already
+ * switched over. In parallel, because they are independent and two round trips in series were
+ * two waits for no reason.
+ */
+async function loadContentPacks(l, dict) {
+  const wantInstr = INSTR_LANGS.includes(l) ? instrPacks['../instr/' + l + '.js'] : null
+  const wantNames = EXERCISE_NAME_LANGS.includes(l) ? exerciseNamePacks['../exercise-names/' + l + '.js'] : null
+  if (!wantInstr && !wantNames) return
+  const [instr, exerciseNames] = await Promise.all([
+    wantInstr ? wantInstr().then(m => m.default).catch(() => null) : null,
+    wantNames ? wantNames().then(m => m.default).catch(() => null) : null,
+  ])
+  // A megabyte is long enough to change your mind in: if the language moved on while these were
+  // in flight, they belong to a language nobody is looking at any more.
+  if (getLang() !== l) return
   _setLangState(l, dict, instr, exerciseNames)
   notify()
 }
