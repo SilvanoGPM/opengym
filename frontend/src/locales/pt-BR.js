@@ -304,7 +304,11 @@ export const PT_BR_OVERRIDES = {
   'How the session went as a whole.': 'Como foi o treino como um todo.',
   'Rest-pause always trains as one warm-up set at this rep count, then one rest-pause work set — "Sets" is not used.': 'O rest-pause sempre treina como uma série de aquecimento com essas repetições e uma série de trabalho rest-pause — “Séries” não é usado.',
   'Log a workout you did': 'Registrar um treino que você fez',
-  'Filling in {0} — no clock, no rest timer.': 'Preenchendo {0} — sem cronômetro, sem timer de descanso.'
+  'Filling in {0} — no clock, no rest timer.': 'Preenchendo {0} — sem cronômetro, sem timer de descanso.',
+  'Edit workout': 'Editar treino',
+  'Discard changes?': 'Descartar as alterações?',
+  'Your edits to this workout will be lost.': 'Suas alterações neste treino serão perdidas.',
+  'Workout updated': 'Treino atualizado'
 }
 
 export default { ...pt, ...PT_BR_OVERRIDES }

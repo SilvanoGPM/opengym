@@ -570,7 +570,7 @@ function ProgressionFields({ ex, mode, c, setC, routine, unit }) {
   </>
 }
 
-function ExConfig({ ex, existing, onSave, onDelete, close, routine, initial }) {
+function ExConfig({ ex, existing, onSave, onDelete, close, routine, initial, saveLabel }) {
   const st = useStore(s => s.S)
   const cardio = isCardio(ex.id)
   const [c, setC] = useState(existing || initial || defaultConfig(ex.id))
@@ -756,12 +756,14 @@ function ExConfig({ ex, existing, onSave, onDelete, close, routine, initial }) {
     <textarea className="input" rows={3} maxLength={500} style={{ marginBottom: 18 }}
       placeholder={t('Note (optional) — loading cues, "bar only then +1 plate/side each set", anything worth remembering here')}
       value={c.note || ''} onChange={e => setC(x => ({ ...x, note: e.target.value }))} />
-    <Button variant="primary" onClick={save}>{existing ? t('Save') : t('Add to routine')}</Button>
+    {/* "Add to routine" is only true when this sheet is used from the plan; adding to a session
+        — live or being edited — is not a change to the routine, and said so until now. */}
+    <Button variant="primary" onClick={save}>{existing ? t('Save') : (saveLabel || t('Add to routine'))}</Button>
     {ex.custom && <><div style={{ height: 8 }} /><Button icon="pencil" onClick={() => { close(); customExSheet(ex) }}>{t('Edit or delete this exercise')}</Button></>}
     {onDelete && <><div style={{ height: 8 }} /><Button variant="danger" onClick={() => { close(); onDelete() }}>{t('Remove from routine')}</Button></>}
   </>
 }
-export const exConfigSheet = (ex, existing, onSave, onDelete, routine, initial) => ui().openSheet(close => <ExConfig ex={ex} existing={existing} initial={initial} onSave={onSave} onDelete={onDelete} routine={routine} close={close} />)
+export const exConfigSheet = (ex, existing, onSave, onDelete, routine, initial, { saveLabel } = {}) => ui().openSheet(close => <ExConfig ex={ex} existing={existing} initial={initial} onSave={onSave} onDelete={onDelete} routine={routine} saveLabel={saveLabel} close={close} />)
 
 /* ============================ glyph picker ============================ */
 // Grouped by what the glyph means for a training day, so picking one is a scan
@@ -937,6 +939,10 @@ function WorkoutDetail({ w, close }) {
     if (!rec) return
     const text = note.trim().slice(0, NOTE_MAX)
     if (text) rec.note = text; else delete rec.note
+    // Keep the unmount flush's baseline in step. Without this, opening the editor right after
+    // typing a note would race it: the editor's draft is built during render, before this
+    // sheet's cleanup effect runs, and saving would then write the pre-flush note back.
+    initial.current = text
   })
   // onBlur alone loses the note: Escape, the Android back gesture and swipe-to-dismiss all
   // close the sheet without ever moving focus out of the textarea. Flush on unmount too. The
@@ -973,6 +979,8 @@ function WorkoutDetail({ w, close }) {
       placeholder={t('How the session went as a whole.')}
       onChange={e => setNote(e.target.value)} onBlur={saveNote} />
     <div style={{ height: 14 }} />
+    <Button icon="pencil" onClick={() => { saveNote(); close(); nav('/history/w/' + w.id) }}>{t('Edit workout')}</Button>
+    <div style={{ height: 8 }} />
     <Button variant="danger" onClick={() => confirmSheet({ title: t('Delete workout?'), message: t('This removes it from your history for good.'), confirmText: t('Delete'), danger: true, onConfirm: () => { update(s => { s.workouts = s.workouts.filter(x => x.id !== w.id) }); close(); toast(t('Workout deleted')) } })}>{t('Delete workout')}</Button>
   </>
 }
@@ -1087,7 +1095,7 @@ function TopWeight({ entryIdx, close }) {
   const ex = entry && EXIDX[entry.id]
   const maxSet = entry ? Math.max(0, ...entry.sets.filter(s => s.done && !isWarmupRow(s)).map(s => s.w || 0)) : 0
   const prevBest = entry ? Math.max((st.exWeights[entry.id] || {}).w || 0, bestWeightFor(st, entry.id)) : 0
-  const [v, setV] = useState(entry ? (Math.max(maxSet, prevBest) || entry.target.weight || 0) : 0)
+  const [v, setV] = useState(entry ? (Math.max(maxSet, prevBest) || entry.target?.weight || 0) : 0)
   useEffect(() => { if (!entry) close() }, [!entry])
 
   const units = supersetUnits(A ? A.entries : [])
