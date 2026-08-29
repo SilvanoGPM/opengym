@@ -79,13 +79,23 @@ export const useStore = create((set, get) => {
     }
   })
 
+  // How this device is set up to look and read. Not account data — signing out clears what you
+  // logged, but it should not put the app back into English on a dark theme, because those were
+  // choices about this browser rather than things stored in the profile. The sign-in screen is
+  // the one screen that only ever renders in this state, so resetting them was most visible
+  // exactly where the app makes its first impression.
+  const DEVICE_PREFS = ['lang', 'theme', 'accent']
+
   // Everything a sign-out leaves behind on this device, whichever way it was triggered.
   const clearLocalSession = () => {
+    const prev = get().S
     get().setUser(null)
     localStorage.removeItem('gym_guest')
     localStorage.removeItem('gym_dirty')
     localStorage.removeItem(KEY)
-    persist(clone(DEF), false)
+    const fresh = clone(DEF)
+    DEVICE_PREFS.forEach(k => { if (prev[k] != null) fresh[k] = prev[k] })
+    persist(fresh, false)
   }
 
   return {

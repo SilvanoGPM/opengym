@@ -308,7 +308,10 @@ export const PT_BR_OVERRIDES = {
   'Edit workout': 'Editar treino',
   'Discard changes?': 'Descartar as alterações?',
   'Your edits to this workout will be lost.': 'Suas alterações neste treino serão perdidas.',
-  'Workout updated': 'Treino atualizado'
+  'Workout updated': 'Treino atualizado',
+  'No passwords': 'Sem senha',
+  'Your data stays yours': 'Seus dados continuam seus',
+  'Works offline': 'Funciona offline'
 }
 
 export default { ...pt, ...PT_BR_OVERRIDES }
