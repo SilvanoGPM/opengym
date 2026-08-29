@@ -4,7 +4,7 @@ import { useUI } from './store/useUI.js'
 import { EXDB, EXIDX, BODYPARTS, isCardio, isBodyweightEq, allExercises, equipmentOf, smOf, matchExercise, exOr } from './lib/exercises.js'
 import { activeProfile, exAvailable, ALL_EQUIPMENT, newProfile } from './lib/equipment.js'
 import { fmtDate, fmtNum, fmtVol, fmtDur, durPart, todayISO, uid, exCount, DAYN, MONTHS_LONG, ACCENTS } from './lib/format.js'
-import { lastEntryFor, bestWeightFor, buildSets, effectiveRoutineId, workoutVolume, setsDone, setsDoneActive, lastBW, supersetUnits, unitOf, setLabel, defaultConfig, cleanupSg, modeOf, effortOf, isBw, isPerSide, sideReps, workSetsDone, applyIntensifierPlan, MAX_PLANNED_WARMUPS, NOTE_MAX } from './lib/history.js'
+import { lastEntryFor, bestWeightFor, buildSets, effectiveRoutineId, historyBefore, workoutVolume, setsDone, setsDoneActive, lastBW, supersetUnits, unitOf, setLabel, defaultConfig, cleanupSg, modeOf, effortOf, isBw, isPerSide, sideReps, workSetsDone, applyIntensifierPlan, MAX_PLANNED_WARMUPS, NOTE_MAX } from './lib/history.js'
 import { beep, vibrate } from './lib/sound.js'
 import { t, instrFor, exerciseNameFor, getLang, INSTR_LANGS } from './lib/i18n.js'
 import { nav } from './lib/nav.js'
@@ -21,7 +21,7 @@ import { buildPlanBundle, parsePlan, mergePlan, printPlan } from './lib/plan-sha
 import { estimate1RM, best1RM, is1RMRecord, REP_CAP } from './lib/onerm.js'
 import { nextPrescription, applyPrescription, policyFor, defaultIncrement, POLICIES_FOR, POLICY_NAME, POLICY_DESC, MAX_BW_SETS } from './lib/progression.js'
 import { MOBILE, shareExport } from './lib/mobile.js'
-import { buildCompletedWorkout } from './lib/finish-workout.js'
+import { buildCompletedWorkout, backdatedStart, insertWorkout, nextExWeight } from './lib/finish-workout.js'
 import { isWarmupRow } from './lib/workout-model.js'
 
 const S = () => useStore.getState().S
@@ -874,6 +874,17 @@ function DayOverride({ iso, close }) {
   const weeklyR = st.routines.find(r => r.id === st.week[wd])
   const hasOvr = st.dayPlan[iso] !== undefined
   const effId = effectiveRoutineId(st, iso)
+  // Forgetting to log a day is not the same as changing the plan for it, but it is reached from
+  // exactly the same place — the week strip and the calendar both land here for any day without
+  // a workout. A day still to come has nothing to record.
+  const past = iso <= todayISO()
+  const effR = effId ? st.routines.find(r => r.id === effId) : null
+  const logDone = () => {
+    if (st.active) { close(); toast(t('Finish your current workout first')); nav('/workout'); return }
+    close()
+    if (iso === todayISO()) startFlow(effId)          // today keeps the normal flow, scale and all
+    else beginWorkout(effId, null, { d: iso })
+  }
   const set = v => {
     update(s => { if (!v) delete s.dayPlan[iso]; else s.dayPlan[iso] = v })
     close()
@@ -883,6 +894,10 @@ function DayOverride({ iso, close }) {
     <h3>{fmtDate(iso, true)}</h3>
     <div className="muted small" style={{ marginBottom: 12 }}>{t('Weekly plan:')} {weeklyR ? weeklyR.name : t('Rest')}{hasOvr && <span style={{ color: 'var(--orange)' }}> · {t('changed for this day')}</span>}<br />{t('Sick, missed a day or want a different session? Pick what to train instead.')}</div>
     <div className="list">
+      {past && <div className="item" onClick={logDone}>
+        <span className="lrow-i" style={{ background: 'var(--acc)' }}><Icon name="check" /></span>
+        <div className="grow"><div className="tt">{t('Log a workout you did')}</div><div className="ss">{effR ? effR.name : t('Freestyle')}</div></div>
+        <Icon name="chevronRight" className="chev" /></div>}
       {st.routines.map(r => <div key={r.id} className="item" onClick={() => set(r.id)}>
         <span className="lrow-i"><Icon name={glyphOf(r.emoji)} /></span>
         <div className="grow"><div className="tt">{r.name}</div><div className="ss">{exCount(r.ex.length)}</div></div>
@@ -1022,20 +1037,40 @@ export function WorkoutRow({ w, onClick }) {
 export function startFlow(routineId) {
   bwSheet({ required: true, onDone: bw => beginWorkout(routineId, bw) })
 }
-export function beginWorkout(routineId, bw) {
+/**
+ * Opens a session. `opts.d` stamps it with a past day — the same workout screen, minus the clock
+ * and minus the body-weight prompt, because today's scale says nothing about last Tuesday. A day
+ * in the future is clamped to today: there is no session to record for a day that has not
+ * happened.
+ */
+export function beginWorkout(routineId, bw, { d } = {}) {
   const st = S()
+  const today = todayISO()
+  const iso = d && d <= today ? d : today
+  const back = iso !== today
+  // A backdated session is seeded from the history as it stood BEFORE the day it fills in, so
+  // "Last time" and the progression line do not quote sessions that, on that day, had not
+  // happened yet — and so the weight it suggests is the one you would have walked in with.
+  const src = back ? historyBefore(st, iso) : st
   const r = routineId ? st.routines.find(x => x.id === routineId) : null
   // The prescription is applied as the session is built, so you walk up to the bar with the
   // right weight already on the screen instead of being told about it afterwards. `plan` is
   // kept on the entry purely so the workout can explain the number it chose.
   const entries = (r ? r.ex : []).map(cfg => {
-    const plan = nextPrescription(st, cfg, r)
+    const plan = nextPrescription(src, cfg, r)
     const step = defaultIncrement(cfg.id, st.unit)
-    const sets = applyIntensifierPlan(applyPrescription(buildSets(st, cfg, { step }), plan, step), cfg)
+    const sets = applyIntensifierPlan(applyPrescription(buildSets(src, cfg, { step }), plan, step), cfg)
     return { id: cfg.id, sg: cfg.sg, target: { ...cfg }, plan, sets }
   })
   update(s => {
-    s.active = { id: uid(), d: todayISO(), start: Date.now(), routineId, name: r ? r.name : t('Freestyle'), bw: bw || null, cur: 0, entries }
+    s.active = {
+      id: uid(), d: iso, start: back ? backdatedStart(iso) : Date.now(),
+      routineId, name: r ? r.name : t('Freestyle'),
+      bw: back ? null : (bw || null), cur: 0, entries,
+      // Intent, not something to re-derive from the date: a live session started at 23:50 rolls
+      // past midnight, and `d !== todayISO()` would make its clock vanish mid-workout.
+      ...(back ? { back: true } : {}),
+    }
   })
   useUI.getState().stopRest()
   nav('/workout')
@@ -1067,14 +1102,16 @@ function TopWeight({ entryIdx, close }) {
     if (!isFinite(n) || n < 0) { toast(t('Enter a valid weight')); return }
     update(s => {
       s.active.entries[entryIdx].topW = n
-      const cur = s.exWeights[entry.id]
-      s.exWeights[entry.id] = { w: Math.max(n, cur ? cur.w : 0), d: todayISO() }
+      // The session's own date, not today's: confirming a weight while filling in last Tuesday
+      // must not rewrite the suggestion that yesterday's session left behind.
+      const nxt = nextExWeight(s.exWeights[entry.id], { w: n, d: A.d })
+      if (nxt) s.exWeights[entry.id] = nxt
     })
     close()
     if (advance && unitDone) {
       if (isLastUnit) workoutCompleteSheet()               // whole workout done → finish/continue prompt
       else update(s => { s.active.cur = units[unitIdx + 1][0] })
-    } else toast(t('Tracked — next time starts at {0}', fmtNum(S().exWeights[entry.id].w) + ' ' + st.unit))
+    } else toast(t('Tracked — next time starts at {0}', fmtNum(S().exWeights[entry.id]?.w ?? n) + ' ' + st.unit))
   }
   return <>
     <h3 className="capitalize row" style={{ gap: 8 }}><Icon name="checkCircle" style={{ color: 'var(--acc)' }} />{t('{0} done', exerciseNameFor(ex))}</h3>
@@ -1208,7 +1245,9 @@ function FinishSummary({ w, prs, e1prs = [], close }) {
     <div style={{ fontSize: 44, display: 'flex', justifyContent: 'center', color: 'var(--acc)' }}><Icon name="trophy" /></div>
     <h3 style={{ margin: '8px 0' }}>{t('Workout complete!')}</h3>
     <div className="tiles" style={{ textAlign: 'left' }}>
-      <div className="tile"><div className="l">{t('Duration')}</div><div className="v" style={{ fontSize: '1.1rem' }}>{fmtDur(w.end - w.start)}</div></div>
+      {/* A session filled in later has no clock; durPart() omits an unknown duration rather
+          than reporting it as "0 min", the same way the history rows do. */}
+      <div className="tile"><div className="l">{t('Duration')}</div><div className="v" style={{ fontSize: '1.1rem' }}>{durPart(w.end - w.start)[0] || '—'}</div></div>
       <div className="tile"><div className="l">{t('Volume')}</div><div className="v" style={{ fontSize: '1.1rem' }}>{fmtVol(w.vol, st.unit)}</div></div>
       <div className="tile"><div className="l">{t('Sets')}</div><div className="v" style={{ fontSize: '1.1rem' }}>{t('{0} sets · {1} work', setsDone(w), workSetsDone(w))}</div></div>
       <div className="tile"><div className="l">{t('PRs')}</div><div className="v" style={{ fontSize: 20 }}>{prs.length || '—'}</div></div>
@@ -1255,9 +1294,12 @@ function doFinishWorkout() {
   update(s => {
     w.entries.forEach(e => {
       const mx = Math.max(0, ...e.sets.filter(x => x.done && !isWarmupRow(x)).map(x => x.w || 0), e.topW || 0)
-      if (mx > 0) { const cur = s.exWeights[e.id]; if (!cur || mx > cur.w) s.exWeights[e.id] = { w: mx, d: w.d } }
+      const nxt = nextExWeight(s.exWeights[e.id], { w: mx, d: w.d })
+      if (nxt) s.exWeights[e.id] = nxt
     })
-    s.workouts.push(w)
+    // Ordered, not appended: half the app reads "the most recent session" as "the last one in
+    // this array", so a day filled in after the fact has to land where it actually happened.
+    s.workouts = insertWorkout(s.workouts, w)
     s.active = null
   })
   useStore.getState().autoBackupNow()

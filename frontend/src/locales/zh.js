@@ -379,6 +379,8 @@ export default {
   'It will be removed from your routines. Already-logged workouts keep their sets.': '将从你的计划中移除。已记录的训练会保留其组数。',
   'Exercise deleted': '动作已删除',
   'Finish your current workout first': '请先完成当前训练',
+  'Log a workout you did': '记录已完成的训练',
+  'Filling in {0} — no clock, no rest timer.': '正在补录 {0} — 无计时器，无组间休息。',
   'Description (optional) — setup, cues, anything you want to remember': '描述（可选）——设置、要点，任何你想记住的内容',
   'Delete exercise': '删除动作',
   'Edit or delete this exercise': '编辑或删除此动作',

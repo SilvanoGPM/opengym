@@ -66,7 +66,9 @@ function Shell() {
   // every tab/route change starts at the top of the page
   useEffect(() => { window.scrollTo(0, 0) }, [loc.pathname])
   // bound to the workout, not to the route — checking Stats mid-session keeps the screen on
-  useWakeLock(!!S.active && S.keepAwake !== false)
+  // Not for a session being filled in after the fact: you are typing at a desk, not resting
+  // between sets, and there is no reason to hold the screen awake.
+  useWakeLock(!!S.active && !S.active.back && S.keepAwake !== false)
 
   const authed = user || isGuest
   if (!ready && !authed) return (

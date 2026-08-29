@@ -379,6 +379,8 @@ export default {
   'It will be removed from your routines. Already-logged workouts keep their sets.': 'Il sera retiré de vos routines. Les séances déjà enregistrées gardent leurs séries.',
   'Exercise deleted': 'Exercice supprimé',
   'Finish your current workout first': 'Terminez d’abord votre séance en cours',
+  'Log a workout you did': 'Enregistrer une séance déjà faite',
+  'Filling in {0} — no clock, no rest timer.': 'Saisie de {0} — pas de chrono, pas de minuteur de repos.',
   'Description (optional) — setup, cues, anything you want to remember': 'Description (facultatif) — installation, conseils, ce que vous voulez retenir',
   'Delete exercise': 'Supprimer l’exercice',
   'Edit or delete this exercise': 'Modifier ou supprimer cet exercice',

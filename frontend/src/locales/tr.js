@@ -379,6 +379,8 @@ export default {
   'It will be removed from your routines. Already-logged workouts keep their sets.': 'Rutinlerinden kaldırılacak. Kayıtlı antrenmanlar setlerini korur.',
   'Exercise deleted': 'Egzersiz silindi',
   'Finish your current workout first': 'Önce mevcut antrenmanını bitir',
+  'Log a workout you did': 'Yaptığın bir antrenmanı kaydet',
+  'Filling in {0} — no clock, no rest timer.': '{0} dolduruluyor — kronometre yok, dinlenme sayacı yok.',
   'Description (optional) — setup, cues, anything you want to remember': 'Açıklama (isteğe bağlı) — kurulum, ipuçları, hatırlamak istediklerin',
   'Delete exercise': 'Egzersizi sil',
   'Edit or delete this exercise': 'Bu egzersizi düzenle veya sil',

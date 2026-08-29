@@ -76,6 +76,10 @@ export const useUI = create((set, get) => ({
 
   startRest(sec) {
     get().stopRest()
+    // Filling in a day that has already happened: there is nothing left to rest for, and a
+    // "rest over" push three days after the workout is pure noise. Handled here for the same
+    // reason as the line below — the four places that start a rest do not each need to know.
+    if (useStore.getState().S.active?.back) return
     // Rest timer set to Off. Stopping and returning rather than starting a zero-length timer
     // keeps every caller honest: the four places that start a rest do not each need to know.
     if (!(sec > 0)) return

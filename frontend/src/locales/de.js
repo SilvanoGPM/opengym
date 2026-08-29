@@ -397,6 +397,8 @@ export default {
   'It will be removed from your routines. Already-logged workouts keep their sets.': 'Sie wird aus deinen Routinen entfernt. Bereits geloggte Workouts behalten ihre Sätze.',
   'Exercise deleted': 'Übung gelöscht',
   'Finish your current workout first': 'Beende zuerst dein laufendes Workout',
+  'Log a workout you did': 'Ein Training nachtragen',
+  'Filling in {0} — no clock, no rest timer.': 'Du trägst {0} nach — keine Uhr, kein Pausentimer.',
   'Description (optional) — setup, cues, anything you want to remember': 'Beschreibung (optional) — Aufbau, Hinweise, was du dir merken willst',
   'Delete exercise': 'Übung löschen',
   'Edit or delete this exercise': 'Übung bearbeiten oder löschen',

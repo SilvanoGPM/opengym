@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { modeOf, isTimed, fmtSec, setLabel, defaultConfig, buildSets, freestyleConfig, exLine, workoutVolume, bestWeightFor, bestWeightForEntry, effortOf, stepEffort, capEffort, isBw, isPerSide, sideReps, repStep, cascadeWeight, insertWarmupRow, removeRowAt, workSetsDone, pairAdjacent, unpairSuperset, supersetUnits, applyIntensifierPlan, pinnedNoteFor, exNoteFor } from './history.js'
+import { modeOf, isTimed, fmtSec, setLabel, defaultConfig, buildSets, freestyleConfig, exLine, workoutVolume, bestWeightFor, bestWeightForEntry, effortOf, stepEffort, capEffort, isBw, isPerSide, sideReps, repStep, cascadeWeight, insertWarmupRow, removeRowAt, workSetsDone, pairAdjacent, unpairSuperset, supersetUnits, applyIntensifierPlan, pinnedNoteFor, exNoteFor, historyBefore, lastEntryFor } from './history.js'
 import { EXDB } from './exercises.js'
 
 // Real ids out of the shipped catalogue, so the body-part fallback is exercised for real.
@@ -843,5 +843,38 @@ describe('exNoteFor', () => {
     expect(exNoteFor({ exNotes: { '0025': ' seat 4, pin 7 ' } }, '0025')).toBe('seat 4, pin 7')
     expect(exNoteFor({ exNotes: { '0025': '   ' } }, '0025')).toBeNull()
     expect(exNoteFor({}, '0025')).toBeNull()
+  })
+})
+
+describe('historyBefore', () => {
+  const LIFT = EXDB.find(e => e.bp !== 'cardio').id
+  const session = (d, weight) => ({
+    id: 'w' + d, d,
+    entries: [{ id: LIFT, target: { sets: 1, reps: 5, weight }, sets: [{ w: weight, r: 5, done: true }] }],
+  })
+  const S = { unit: 'kg', workouts: [session('2026-01-01', 50), session('2026-01-05', 60), session('2026-01-08', 70)] }
+
+  it('cuts strictly before the day — the day being filled in is not its own history', () => {
+    expect(historyBefore(S, '2026-01-05').workouts.map(w => w.d)).toEqual(['2026-01-01'])
+  })
+
+  it('hands back the state untouched when there is no day to look back from', () => {
+    expect(historyBefore(S, null)).toBe(S)
+  })
+
+  it('does not disturb the state it was given', () => {
+    historyBefore(S, '2026-01-05')
+    expect(S.workouts).toHaveLength(3)
+  })
+
+  it('makes "last time" the session before the day, not the newest one', () => {
+    // Seeding a session for the 5th from the live state would quote the 8th — a workout that,
+    // on the day being filled in, had not happened yet.
+    expect(lastEntryFor(S, LIFT).d).toBe('2026-01-08')
+    expect(lastEntryFor(historyBefore(S, '2026-01-05'), LIFT).d).toBe('2026-01-01')
+  })
+
+  it('leaves a backdated session with no history at all when nothing came before it', () => {
+    expect(lastEntryFor(historyBefore(S, '2025-12-01'), LIFT)).toBe(null)
   })
 })

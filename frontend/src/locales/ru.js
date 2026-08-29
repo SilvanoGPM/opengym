@@ -379,6 +379,8 @@ export default {
   'It will be removed from your routines. Already-logged workouts keep their sets.': 'Оно будет убрано из ваших программ. Записанные тренировки сохранят свои подходы.',
   'Exercise deleted': 'Упражнение удалено',
   'Finish your current workout first': 'Сначала завершите текущую тренировку',
+  'Log a workout you did': 'Записать прошедшую тренировку',
+  'Filling in {0} — no clock, no rest timer.': 'Заполняется {0} — без секундомера и таймера отдыха.',
   'Description (optional) — setup, cues, anything you want to remember': 'Описание (необязательно) — настройка, подсказки, всё, что хотите запомнить',
   'Delete exercise': 'Удалить упражнение',
   'Edit or delete this exercise': 'Изменить или удалить это упражнение',

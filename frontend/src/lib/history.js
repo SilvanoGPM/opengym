@@ -206,6 +206,17 @@ export function unpairSuperset(items, idx) {
   return next
 }
 
+/**
+ * The same state, seen from the day before `iso`.
+ *
+ * A session you are filling in happened on that day, so "what you lifted last time" is the last
+ * session BEFORE it — not the one you did yesterday, which on that day had not happened yet.
+ * Seeding a backdated session from the live state would print a "Last time" line from its own
+ * future and prescribe a weight off it.
+ */
+export const historyBefore = (S, iso) =>
+  (!iso ? S : { ...S, workouts: (S.workouts || []).filter(w => w.d < iso) })
+
 export function lastEntryFor(S, exId) {
   for (let i = S.workouts.length - 1; i >= 0; i--) {
     const en = S.workouts[i].entries.find(e => e.id === exId)

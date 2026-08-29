@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store/useStore.js'
 import { useUI } from '../store/useUI.js'
 import { exOr } from '../lib/exercises.js'
-import { effectiveRoutine, lastEntryFor, bestWeightFor, buildSets, freestyleConfig, defaultConfig, setsDoneActive, supersetUnits, unitOf, setLabel, modeOf, isBw, isPerSide, sideReps, repStep, EFFORT, effortOf, stepEffort, capEffort, cascadeWeight, insertWarmupRow, removeRowAt, pairAdjacent, unpairSuperset, cleanupSg, applyIntensifierPlan, pinnedNoteFor, exNoteFor } from '../lib/history.js'
+import { effectiveRoutine, lastEntryFor, bestWeightFor, buildSets, freestyleConfig, defaultConfig, setsDoneActive, supersetUnits, unitOf, setLabel, modeOf, isBw, isPerSide, sideReps, repStep, EFFORT, effortOf, stepEffort, capEffort, cascadeWeight, insertWarmupRow, removeRowAt, pairAdjacent, unpairSuperset, cleanupSg, applyIntensifierPlan, pinnedNoteFor, exNoteFor, historyBefore } from '../lib/history.js'
 import { fmtNum, fmtDate, todayISO, exCount, DAYN } from '../lib/format.js'
 import { beep, vibrate } from '../lib/sound.js'
 import { t, exerciseNameFor } from '../lib/i18n.js'
@@ -95,7 +95,9 @@ function ExerciseBlock({ entryIdx, compact, onToggle, onField, onAddSet, onRemov
   const mode = modeOf({ ...(entry.target || {}), id: entry.id })
   const cardio = mode === 'cardio'
   const timed = mode === 'time'
-  const last = lastEntryFor(S, entry.id)
+  // "Last time" means the session before the one you are logging — on a day being filled in that
+  // is not the newest session in the history, which happened after it.
+  const last = lastEntryFor(S.active.back ? historyBefore(S, S.active.d) : S, entry.id)
   const standingNote = exNoteFor(S, entry.id)
   // Only worth surfacing while there is still work left: once the exercise is finished, a note
   // telling you what to do in it is behind you, and the block is already long.
@@ -213,7 +215,7 @@ function ExerciseBlock({ entryIdx, compact, onToggle, onField, onAddSet, onRemov
             {col3 && cell(s, i, col3, 'eff')}
             {/* A timed set is started, not typed: the timer counts the hold down and checks the
                 set off itself. The checkbox stays for anyone who timed it on their own watch. */}
-            {timed && <button className="setgo" aria-label={t('Start set')} disabled={s.done || !!working}
+            {timed && !S.active.back && <button className="setgo" aria-label={t('Start set')} disabled={s.done || !!working}
               onClick={() => onStartTimed(i)}><Icon name="play" /></button>}
             {warm && <button className="iconbtn" style={{ fontSize: 13 }} aria-label={t('Remove set')}
               disabled={entry.sets.length <= 1} onClick={() => onRemoveSetAt(i)}><Icon name="xmark" /></button>}
@@ -453,7 +455,9 @@ function ActiveWorkout() {
   // Live-presence heartbeat so the admin dashboard can show who's training now. Signed-in only —
   // guests have no server session. Reads fresh state each tick so progress stays current.
   useEffect(() => {
-    if (!useStore.getState().user) return
+    // A session being filled in for last Tuesday is not someone training now — saying so on the
+    // admin dashboard would be a plain lie.
+    if (!useStore.getState().user || A.back) return
     let stopped = false
     const ping = active => {
       const A2 = useStore.getState().S.active
@@ -480,10 +484,15 @@ function ActiveWorkout() {
   return <div className="narrow">
     <div className="hdr">
       <button className="iconbtn" aria-label={t('Discard')} onClick={() => confirmSheet({ title: t('Discard workout?'), message: t('The sets you logged in this session will be lost.'), confirmText: t('Discard'), danger: true, onConfirm: () => { update(s => { s.active = null }); stopRest(); nav('/home') } })}><Icon name="xmark" /></button>
-      <div style={{ textAlign: 'center' }}><div style={{ fontWeight: 600 }}>{A.name}</div><div className="sub"><Elapsed start={A.start} /> · {t('{0} sets', done + '/' + total)}</div></div>
+      {/* Filling in a past day has no clock to run: an elapsed timer counting from that morning
+          would report the days you forgot as minutes. The date takes its place. */}
+      <div style={{ textAlign: 'center' }}><div style={{ fontWeight: 600 }}>{A.name}</div><div className="sub">{A.back
+        ? <span className="row" style={{ display: 'inline-flex', gap: 4 }}><Icon name="calendar" />{fmtDate(A.d, true)}</span>
+        : <Elapsed start={A.start} />} · {t('{0} sets', done + '/' + total)}</div></div>
       <button className="iconbtn" style={{ color: 'var(--acc)' }} aria-label={t('Finish')} onClick={finishWorkout}><Icon name="check" /></button>
     </div>
     <div className="wprog"><i style={{ width: (total ? done / total * 100 : 0) + '%' }} /></div>
+    {A.back && <div className="exnote" style={{ color: 'var(--orange)' }}>{t('Filling in {0} — no clock, no rest timer.', fmtDate(A.d, true))}</div>}
 
     {A.entries.length ? <>
       <div className="muted small" style={{ marginBottom: 6 }}>{isSuperset ? t('Superset {0} / {1}', unitIdx + 1, units.length) : t('Exercise {0} / {1}', unitIdx + 1, units.length)}</div>
@@ -515,11 +524,14 @@ function ActiveWorkout() {
       const freestyle = !A.routineId
       // Freestyle has no routine prescription to apply: show the last target in the config
       // sheet and carry its completed rows forward. A planned session keeps its existing path.
-      const seed = freestyle ? freestyleConfig(S, { id: ex.id, ...defaultConfig(ex.id) }) : null
+      const seed = freestyle ? freestyleConfig(A.back ? historyBefore(S, A.d) : S, { id: ex.id, ...defaultConfig(ex.id) }) : null
       exConfigSheet(ex, null, cfg => update(s => {
         const full = { ...cfg, id: ex.id }
-        const plan = freestyle ? null : nextPrescription(s, full, s.routines.find(r => r.id === s.active.routineId))
-        const sets = buildSets(s, full, { step: defaultIncrement(ex.id, s.unit), ...(freestyle ? { preferLast: true } : {}) })
+        // Same rule as beginWorkout: a backdated session reads the history as it stood before
+        // the day it fills in, so an exercise added mid-session is seeded the same way.
+        const src = s.active.back ? historyBefore(s, s.active.d) : s
+        const plan = freestyle ? null : nextPrescription(src, full, s.routines.find(r => r.id === s.active.routineId))
+        const sets = buildSets(src, full, { step: defaultIncrement(ex.id, s.unit), ...(freestyle ? { preferLast: true } : {}) })
         const progressed = freestyle ? sets : applyPrescription(sets, plan, defaultIncrement(ex.id, s.unit))
         s.active.entries.push({ id: ex.id, target: { ...cfg }, plan, sets: applyIntensifierPlan(progressed, full) })
         s.active.cur = s.active.entries.length - 1
