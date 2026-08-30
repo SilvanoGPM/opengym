@@ -1033,3 +1033,11 @@ h4.sec{
 }
 .si-facts li{display:flex;align-items:center;gap:5px}
 .si-facts .icn{font-size:14px;color:var(--label-2)}
+
+/* Rows separated by a hairline inside a card, as opposed to `.list`, which is a stack of `.item`
+   cards and deliberately becomes two columns on a wide screen (see the desktop block above).
+   Used by the admin screens, where a routine and its exercise count belong on one line and side
+   by side reads as two unrelated lists. */
+.rowlist{display:flex;flex-direction:column}
+.rowlist>*{padding:9px 2px;border-bottom:var(--hair) solid var(--sep)}
+.rowlist>*:last-child{border-bottom:none}

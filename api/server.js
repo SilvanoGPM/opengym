@@ -13,6 +13,11 @@ import {
 import webpush from 'web-push';
 import { dayReminderPush, restTimerPush, testPush } from './push-messages.js';
 import { verifyError } from './verify-error.js';
+import { summarizeRow, summarize } from './user-summary.js';
+import { mergeState, replaceState } from './state-merge.js';
+import { SNAPSHOT_DIR, snapshotName, snapshotsFor, snapshotsToPrune } from './snapshots.js';
+import { canAdminWrite } from './admin-write.js';
+import { planUserDelete } from './admin-delete.js';
 
 const PORT = +(process.env.PORT || 3000);
 const DATA = process.env.DATA_DIR || '/data';
@@ -59,6 +64,53 @@ function atomicWrite(file, content) {
 const stateFile = uid => path.join(DATA, 'state-' + uid.replace(/[^a-zA-Z0-9_-]/g, '') + '.json');
 function readState(uid) {
   try { return JSON.parse(fs.readFileSync(stateFile(uid), 'utf8')); } catch { return null; }
+}
+
+// uid -> { mtimeMs, size, row }. Caches only the dashboard's list row, which is the one thing
+// read for every user at once; the detail screen and every write path read the file directly.
+// Keyed on mtime+size rather than time: every writer goes through atomicWrite's rename, so the
+// stamp always moves when the contents do and a stale row cannot be served.
+const rowCache = new Map();
+function cachedRow(uid) {
+  let st = null;
+  try { st = fs.statSync(stateFile(uid)); } catch { rowCache.delete(uid); return summarizeRow(null); }
+  const hit = rowCache.get(uid);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.row;
+  const row = summarizeRow(readState(uid));
+  rowCache.set(uid, { mtimeMs: st.mtimeMs, size: st.size, row });
+  return row;
+}
+
+/* ---------- snapshots (administrative writes only) ----------
+   Every admin write copies the current state aside first, which is what makes writing into
+   somebody else's account reversible. A normal PUT /api/data never lands here — this is not
+   version history, it is an undo for operator actions. */
+const SNAPSHOT_KEEP = Math.max(1, +(process.env.ADMIN_SNAPSHOT_KEEP || 10) || 10);
+const snapDir = () => path.join(DATA, SNAPSHOT_DIR);
+function listSnapshotFiles(uid) {
+  try { return snapshotsFor(fs.readdirSync(snapDir()), uid).map(x => x.file); } catch { return []; }
+}
+function listSnapshots(uid) {
+  try {
+    return snapshotsFor(fs.readdirSync(snapDir()), uid).map(x => {
+      let bytes = 0;
+      try { bytes = fs.statSync(path.join(snapDir(), x.file)).size; } catch {}
+      return { ts: x.ts, bytes };
+    });
+  } catch { return []; }
+}
+function takeSnapshot(uid, state) {
+  const ts = Date.now();
+  fs.mkdirSync(snapDir(), { recursive: true });
+  atomicWrite(path.join(snapDir(), snapshotName(uid, ts)), JSON.stringify(state || {}));
+  return ts;
+}
+function pruneSnapshots(uid) {
+  try {
+    for (const f of snapshotsToPrune(fs.readdirSync(snapDir()), uid, SNAPSHOT_KEEP)) {
+      try { fs.unlinkSync(path.join(snapDir(), f)); } catch {}
+    }
+  } catch {}
 }
 
 /* ---------- push notifications (Web Push / VAPID) ---------- */
@@ -399,10 +451,20 @@ function json(res, code, obj, extraHeaders) {
 }
 function readBody(req) {
   return new Promise((resolve, reject) => {
-    let size = 0; const chunks = [];
+    let size = 0, tooBig = false; const chunks = [];
     req.on('data', d => {
       size += d.length;
-      if (size > MAX_BODY) { reject(new Error('body too large')); req.destroy(); return; }
+      // Carries its own status: without it this surfaced as a 500 "server error", which sends an
+      // operator looking for a bug in the server instead of at the size of the file they picked.
+      //
+      // Deliberately does NOT destroy the request. Tearing the socket down here killed the
+      // connection before the 413 could be written, so the client saw a transport error instead
+      // of the reason — the very thing this is for. Stop accumulating, drop what was collected,
+      // and let the response go out; nginx caps the read at 8m in front of this anyway.
+      if (size > MAX_BODY) {
+        if (!tooBig) { tooBig = true; chunks.length = 0; reject(Object.assign(new Error('body too large'), { status: 413 })); }
+        return;
+      }
       chunks.push(d);
     });
     req.on('end', () => {
@@ -819,27 +881,45 @@ const routes = {
   },
 
   /* ---------- admin dashboard ---------- */
-  // One row per user, cheap enough for a personal instance (reads each state file once).
+  // Who is training right now, and nothing else. Split out of /api/admin/users because presence
+  // is the only part the dashboard wants on a 15s timer, and this reads a Map in memory instead
+  // of parsing every user's state file off disk 240 times an hour.
+  'GET /api/admin/presence': async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const live = [];
+    for (const u of db.users) {
+      const p = livePresence(u.id);
+      // Named field by field rather than spread: the presence record's own `name` is the
+      // routine being trained, which would otherwise overwrite the person's name.
+      if (p) live.push({
+        id: u.id, user: u.name, workout: p.name,
+        exIdx: p.exIdx, exTotal: p.exTotal, setsDone: p.setsDone, setsTotal: p.setsTotal,
+        startedAt: p.startedAt, updatedAt: p.updatedAt
+      });
+    }
+    json(res, 200, { live, now: Date.now() });
+  },
+
+  // One row per user. Each state file's summary is cached against its mtime+size: every writer
+  // goes through atomicWrite's rename, so the stamp always moves when the contents do and the
+  // cache cannot serve a stale row.
   'GET /api/admin/users': async (req, res) => {
     if (!requireAdmin(req, res)) return;
-    const users = db.users.map(u => {
-      const S = readState(u.id) || {};
-      const workouts = S.workouts || [];
-      const last = workouts[workouts.length - 1];
-      return {
-        id: u.id, name: u.name, created: u.created || null,
-        disabled: !!u.disabled, admin: isAdmin(u), invitedBy: u.invitedBy || null,
-        workouts: workouts.length,
-        lastWorkout: last ? last.d : null,
-        lastSync: S._ts || null,
-        hasPush: db.subs.some(s => s.userId === u.id),
-        live: livePresence(u.id)
-      };
-    });
+    const users = db.users.map(u => ({
+      id: u.id, name: u.name, created: u.created || null,
+      disabled: !!u.disabled, admin: isAdmin(u), invitedBy: u.invitedBy || null,
+      ...cachedRow(u.id),
+      hasPush: db.subs.some(s => s.userId === u.id),
+      live: livePresence(u.id)
+    }));
     json(res, 200, { users, invite_only: INVITE_ONLY, now: Date.now() });
   },
 
   // Drill-down: full workout history + body-weight log for one user.
+  // Overview of one user. Deliberately carries no workout array: it used to ship the entire
+  // history on every open, reversed for display — and a reversed history is a trap for anything
+  // that writes it back, since the rest of the app assumes ascending by date. The list lives at
+  // /api/admin/user/workouts (paged) and the writable copy at /api/admin/user/state (ascending).
   'GET /api/admin/user': async (req, res) => {
     if (!requireAdmin(req, res)) return;
     const id = new URL(req.url, 'http://x').searchParams.get('id');
@@ -847,13 +927,198 @@ const routes = {
     if (!u) return json(res, 404, { error: 'no such user' });
     const S = readState(u.id) || {};
     json(res, 200, {
-      user: { id: u.id, name: u.name, created: u.created || null, disabled: !!u.disabled, admin: isAdmin(u), invitedBy: u.invitedBy || null },
+      user: { id: u.id, name: u.name, created: u.created || null, disabled: !!u.disabled, admin: isAdmin(u), envAdmin: ADMIN_UIDS.includes(u.id), invitedBy: u.invitedBy || null },
       unit: S.unit || 'kg',
       lastSync: S._ts || null,
       routines: (S.routines || []).map(r => ({ id: r.id, name: r.name, emoji: r.emoji, count: (r.ex || []).length })),
       bodyweight: S.bodyweight || [],
-      workouts: (S.workouts || []).slice().reverse()   // newest first for display
+      live: !!livePresence(u.id),
+      ...summarize(S)
     });
+  },
+
+  // Paged history, newest first. `before` is the id of the last row of the previous page.
+  'GET /api/admin/user/workouts': async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const q = new URL(req.url, 'http://x').searchParams;
+    const u = db.users.find(x => x.id === q.get('id'));
+    if (!u) return json(res, 404, { error: 'no such user' });
+    const limit = Math.min(200, Math.max(1, +q.get('limit') || 50));
+    const before = q.get('before');
+    const all = (readState(u.id) || {}).workouts || [];
+    const newestFirst = all.slice().reverse();
+    const from = before ? newestFirst.findIndex(w => w.id === before) + 1 : 0;
+    const page = newestFirst.slice(from, from + limit);
+    json(res, 200, {
+      workouts: page,
+      total: all.length,
+      nextBefore: from + limit < newestFirst.length && page.length ? page[page.length - 1].id : null
+    });
+  },
+
+  // The state file as stored: ascending, unmodified. The download source, and the base any
+  // write starts from.
+  'GET /api/admin/user/state': async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const id = new URL(req.url, 'http://x').searchParams.get('id');
+    const u = db.users.find(x => x.id === id);
+    if (!u) return json(res, 404, { error: 'no such user' });
+    const S = readState(u.id);
+    json(res, 200, { id: u.id, name: u.name, state: S, ts: S ? S._ts || null : null });
+  },
+
+  /* ---------- administrative writes ----------
+     Writing into somebody else's account is only defensible with guards that hold, so all four
+     land here together: validate, snapshot, refuse under a live session, and audit. The order is
+     enforced by canAdminWrite (api/admin-write.js) rather than re-typed per route.
+
+     The residual risk is documented in SECURITY.md and is real: PUT /api/data is last-write-wins
+     with no _ts comparison, so the target's own client can overwrite any of this within seconds
+     of their next interaction. That is why writing under a live session is refused, and why the
+     snapshot exists. */
+
+  // Restore or merge a state file. Also the route the CSV import posts to: parsing needs the
+  // exercise catalogue, which only the frontend has, so the client parses and the server applies
+  // the merge rule — the rule stays server-side and tested.
+  'POST /api/admin/user/state': async (req, res) => {
+    const admin = requireAdmin(req, res); if (!admin) return;
+    const body = await readBody(req);
+    const u = db.users.find(x => x.id === body.id);   // resolve BEFORE touching any path
+    const gate = canAdminWrite({ target: u, mode: body.mode, state: body.state, confirm: body.confirm, live: !!(u && livePresence(u.id)) });
+    if (!gate.ok) return json(res, gate.status, { error: gate.error, code: gate.code });
+
+    const before = readState(u.id) || {};
+    const snap = takeSnapshot(u.id, before);
+    const r = body.mode === 'replace' ? replaceState(body.state) : mergeState(before, body.state);
+    atomicWrite(stateFile(u.id), JSON.stringify(r.state));
+    pruneSnapshots(u.id);
+    audit(req, body.mode === 'replace' ? 'admin.user.state.replace' : 'admin.user.state.merge',
+      { user: admin, target: u, msg: `+${r.added} workouts, ${r.skipped} skipped` });
+    json(res, 200, { ok: true, added: r.added, skipped: r.skipped, addedBodyweight: r.addedBodyweight, snapshot: snap, workouts: r.state.workouts.length });
+  },
+
+  'POST /api/admin/user/workout/delete': async (req, res) => {
+    const admin = requireAdmin(req, res); if (!admin) return;
+    const body = await readBody(req);
+    const u = db.users.find(x => x.id === body.id);
+    const gate = canAdminWrite({ target: u, live: !!(u && livePresence(u.id)) });
+    if (!gate.ok) return json(res, gate.status, { error: gate.error, code: gate.code });
+
+    const S = readState(u.id) || {};
+    const gone = (S.workouts || []).find(w => w.id === body.workoutId);
+    if (!gone) return json(res, 404, { error: 'no such workout' });
+    const snap = takeSnapshot(u.id, S);
+    // Exactly what WorkoutEdit does client-side, exWeights left alone included: an admin deletion
+    // that behaved differently from the user's own would be its own kind of surprise.
+    S.workouts = S.workouts.filter(w => w.id !== body.workoutId);
+    S._ts = Date.now();
+    atomicWrite(stateFile(u.id), JSON.stringify(S));
+    pruneSnapshots(u.id);
+    audit(req, 'admin.user.workout.delete', { user: admin, target: u, msg: gone.d });
+    json(res, 200, { ok: true, snapshot: snap, workouts: S.workouts.length });
+  },
+
+  'GET /api/admin/user/snapshots': async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const id = new URL(req.url, 'http://x').searchParams.get('id');
+    const u = db.users.find(x => x.id === id);
+    if (!u) return json(res, 404, { error: 'no such user' });
+    json(res, 200, { snapshots: listSnapshots(u.id), keep: SNAPSHOT_KEEP });
+  },
+
+  // Rolling back is itself a replace, so it snapshots first — undoing an undo works.
+  'POST /api/admin/user/snapshots/restore': async (req, res) => {
+    const admin = requireAdmin(req, res); if (!admin) return;
+    const body = await readBody(req);
+    const u = db.users.find(x => x.id === body.id);
+    const gate = canAdminWrite({ target: u, live: !!(u && livePresence(u.id)), requireConfirm: true, confirm: body.confirm });
+    if (!gate.ok) return json(res, gate.status, { error: gate.error, code: gate.code });
+
+    let restored = null;
+    try { restored = JSON.parse(fs.readFileSync(path.join(DATA, SNAPSHOT_DIR, snapshotName(u.id, +body.ts)), 'utf8')); }
+    catch { return json(res, 404, { error: 'no such snapshot' }); }
+    const snap = takeSnapshot(u.id, readState(u.id) || {});
+    const r = replaceState(restored);
+    atomicWrite(stateFile(u.id), JSON.stringify(r.state));
+    pruneSnapshots(u.id);
+    audit(req, 'admin.user.snapshot.restore', { user: admin, target: u, msg: new Date(+body.ts).toISOString() });
+    json(res, 200, { ok: true, snapshot: snap, workouts: r.state.workouts.length });
+  },
+
+  // Snapshots accumulate: ten per user by default, and an operator clearing up should not have
+  // to reach for the filesystem. No live check — deleting an undo point changes nobody's data.
+  'POST /api/admin/user/snapshots/delete': async (req, res) => {
+    const admin = requireAdmin(req, res); if (!admin) return;
+    const body = await readBody(req);
+    const u = db.users.find(x => x.id === body.id);
+    if (!u) return json(res, 404, { error: 'no such user' });
+    // Resolved through snapshotName from the user we just looked up, never from a caller-supplied
+    // path — stateFile()'s sanitiser strips bad characters rather than rejecting them.
+    const all = listSnapshots(u.id);
+    const targets = body.ts === 'all' ? all.map(s => s.ts) : [+body.ts];
+    if (body.ts !== 'all' && !all.some(s => s.ts === +body.ts)) return json(res, 404, { error: 'no such snapshot' });
+    let removed = 0;
+    for (const ts of targets) {
+      try { fs.unlinkSync(path.join(snapDir(), snapshotName(u.id, ts))); removed++; } catch {}
+    }
+    audit(req, 'admin.user.snapshot.delete', { user: admin, target: u, msg: body.ts === 'all' ? `all (${removed})` : new Date(+body.ts).toISOString() });
+    json(res, 200, { ok: true, removed, snapshots: listSnapshots(u.id) });
+  },
+
+  // The flag, not ADMIN_UIDS — which this cannot touch, because isAdmin ORs the two sources.
+  'POST /api/admin/user/admin': async (req, res) => {
+    const admin = requireAdmin(req, res); if (!admin) return;
+    const body = await readBody(req);
+    const u = db.users.find(x => x.id === body.id);
+    if (!u) return json(res, 404, { error: 'no such user' });
+    const want = !!body.admin;
+    if (!want) {
+      if (u.id === admin.id) return json(res, 400, { error: 'you cannot demote yourself', code: 'self' });
+      if (ADMIN_UIDS.includes(u.id)) {
+        return json(res, 400, { code: 'env-admin', error: 'this admin comes from the ADMIN_UIDS environment variable — remove them there and restart the server' });
+      }
+      if (!db.users.some(x => x.id !== u.id && isAdmin(x))) {
+        return json(res, 400, { code: 'last-admin', error: 'that would leave the instance with no admin' });
+      }
+      delete u.admin;
+    } else u.admin = true;
+    saveDb();
+    audit(req, want ? 'admin.user.promote' : 'admin.user.demote', { user: admin, target: u });
+    json(res, 200, { ok: true, id: u.id, admin: isAdmin(u) });
+  },
+
+  // Permanent. The operator's own backups of ./data are the only way back, which SECURITY.md says.
+  'POST /api/admin/user/delete': async (req, res) => {
+    const admin = requireAdmin(req, res); if (!admin) return;
+    const body = await readBody(req);
+    const u = db.users.find(x => x.id === body.id);
+    if (!u) return json(res, 404, { error: 'no such user' });
+    if (u.id === admin.id) return json(res, 400, { error: 'you cannot delete your own account here' });
+    if (isAdmin(u)) return json(res, 400, { error: 'cannot delete an admin — demote them first' });
+    // Checked here and not only in the UI, so curl cannot skip what the dashboard demands.
+    if (body.confirm !== u.name) return json(res, 400, { code: 'confirm-name', error: 'type the account name exactly to confirm' });
+    if (livePresence(u.id)) return json(res, 409, { code: 'live', error: `${u.name} is training right now` });
+
+    const target = { id: u.id, name: u.name };          // captured before the row goes
+    const counts = { workouts: ((readState(u.id) || {}).workouts || []).length };
+    cancelRestTimer(u.id);
+    presence.delete(u.id);
+    const plan = planUserDelete(db, u.id);
+    db.users = plan.users; db.creds = plan.creds; db.subs = plan.subs; db.invites = plan.invites;
+    saveDb();                                            // db.json is an in-memory cache: this is the write
+    rowCache.delete(u.id);
+    try { fs.unlinkSync(stateFile(u.id)); } catch {}
+    for (const f of listSnapshotFiles(u.id)) { try { fs.unlinkSync(path.join(DATA, SNAPSHOT_DIR, f)); } catch {} }
+    audit(req, 'admin.user.delete', { user: admin, target, msg: `workouts=${counts.workouts} creds=${plan.removed.creds} subs=${plan.removed.subs}` });
+    json(res, 200, { ok: true, removed: plan.removed });
+  },
+
+  // The file already is the export; this is for whoever is holding a dashboard rather than a shell.
+  'GET /api/admin/audit/export': async (req, res) => {
+    const admin = requireAdmin(req, res); if (!admin) return;
+    const events = auditKeep(auditLines());
+    audit(req, 'admin.audit.export', { user: admin, msg: String(events.length) });
+    json(res, 200, { events });
   },
 
   'POST /api/admin/user/disable': async (req, res) => {
@@ -972,6 +1237,10 @@ http.createServer(async (req, res) => {
   try { await handler(req, res); }
   catch (e) {
     console.error(key, e);
-    if (!res.headersSent) json(res, 500, { error: 'server error' });
+    if (res.headersSent) return;
+    // A handler may label an error with the status it deserves (readBody does, for a body over
+    // MAX_BODY). Anything unlabelled is a bug here and stays a 500.
+    if (e && e.status) return json(res, e.status, { error: e.message || 'request refused' });
+    json(res, 500, { error: 'server error' });
   }
 }).listen(PORT, () => console.log(`gym-api on :${PORT} (rpID=${RP_ID}, origin=${ORIGIN})`));

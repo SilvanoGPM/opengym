@@ -21,11 +21,25 @@ const LABELS = {
   'auth.register.denied': 'Signup refused',
   'auth.logout': 'Signed out',
   'auth.logout.all': 'Signed out everywhere',
+  // Pairing the mobile app to a server. These have been emitted since the pairing flow shipped
+  // and had no label here, so the dashboard printed the dotted identifier at whoever read it.
+  'auth.pair.create': 'Started pairing a device',
+  'auth.pair.ok': 'Paired a device',
+  'auth.pair.fail': 'Device pairing failed',
   'admin.user.disable': 'Disabled an account',
   'admin.user.enable': 'Re-enabled an account',
   'admin.invite.create': 'Created an invite code',
   'admin.invite.revoke': 'Revoked an invite code',
   'admin.audit.clear': 'Cleared the activity log',
+  'admin.user.state.merge': 'Merged data into an account',
+  'admin.user.state.replace': 'Replaced an account’s data',
+  'admin.user.workout.delete': 'Deleted a workout',
+  'admin.user.snapshot.restore': 'Rolled an account back to a snapshot',
+  'admin.user.snapshot.delete': 'Deleted a snapshot',
+  'admin.user.promote': 'Made someone an admin',
+  'admin.user.demote': 'Removed someone’s admin',
+  'admin.user.delete': 'Deleted an account',
+  'admin.audit.export': 'Exported the activity log',
   'admin.denied': 'Blocked from the admin dashboard'
 }
 // An unknown event is shown raw rather than dropped or rendered as "undefined": a dashboard
@@ -41,7 +55,9 @@ const REASONS = {
   'account-disabled': 'the account is disabled',
   'credential-exists': 'that passkey already belongs to a profile',
   'invite-invalid': 'the invite code was used or revoked in the meantime',
-  'invite-rejected': 'wrong or already-used invite code'
+  'invite-rejected': 'wrong or already-used invite code',
+  'code-invalid': 'wrong or expired pairing code',
+  'user-unavailable': 'the profile is disabled or no longer exists'
 }
 export const auditReason = msg => REASONS[msg] || (msg ? String(msg) : '')
 

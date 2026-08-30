@@ -7,12 +7,17 @@ import { auditCat, auditLabel, auditReason, auditLine, fmtWhen } from './audit.j
 const EVENTS = [
   'auth.login.ok', 'auth.login.fail', 'auth.register.ok', 'auth.register.fail',
   'auth.register.denied', 'auth.logout', 'auth.logout.all',
+  'auth.pair.create', 'auth.pair.ok', 'auth.pair.fail',
   'admin.user.disable', 'admin.user.enable', 'admin.invite.create',
-  'admin.invite.revoke', 'admin.audit.clear', 'admin.denied'
+  'admin.invite.revoke', 'admin.audit.clear', 'admin.audit.export', 'admin.denied',
+  'admin.user.state.merge', 'admin.user.state.replace', 'admin.user.workout.delete',
+  'admin.user.snapshot.restore', 'admin.user.snapshot.delete',
+  'admin.user.promote', 'admin.user.demote', 'admin.user.delete'
 ]
 const REASONS = [
   'challenge-expired', 'unknown-credential', 'verify-error', 'not-verified',
-  'user-missing', 'account-disabled', 'credential-exists', 'invite-invalid', 'invite-rejected'
+  'user-missing', 'account-disabled', 'credential-exists', 'invite-invalid', 'invite-rejected',
+  'code-invalid', 'user-unavailable'
 ]
 
 describe('auditLabel', () => {

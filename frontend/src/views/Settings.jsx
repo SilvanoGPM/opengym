@@ -42,8 +42,11 @@ export default function Settings() {
     const rd = new FileReader()
     rd.onload = () => {
       try {
-        const data = JSON.parse(rd.result)
-        if (!data.workouts || !data.routines) throw new Error('not an openGym backup')
+        const raw = JSON.parse(rd.result)
+        // An admin-issued backup wraps the same state in an envelope (lib/admin-backup.js). Both
+        // are read here so a file handed back by whoever runs the server restores like your own.
+        const data = raw && raw.opengym_backup ? raw.state : raw
+        if (!data || !data.workouts || !data.routines) throw new Error('not an openGym backup')
         confirmSheet({ title: t('Import backup?'), message: t('This replaces all current data with the backup file.'), confirmText: t('Import'), danger: true, onConfirm: () => { replaceState(Object.assign(JSON.parse(JSON.stringify(DEF)), data), true); toast(t('Backup imported')) } })
       } catch (e) { toast(t('Import failed: {0}', e.message)) }
     }

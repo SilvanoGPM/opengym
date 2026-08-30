@@ -3,9 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store/useStore.js'
 import { useUI } from '../store/useUI.js'
 import { api } from '../lib/api.js'
-import { fmtDate, fmtNum, fmtVol, fmtDur } from '../lib/format.js'
+import { fmtDate, fmtNum } from '../lib/format.js'
 import { auditCat, auditLine, fmtWhen } from '../lib/audit.js'
-import { workoutVolume, setsDone } from '../lib/history.js'
 import { confirmSheet } from '../sheets.jsx'
 import Icon from '../components/Icon.jsx'
 import { Button } from '../components/ui.jsx'
@@ -23,46 +22,6 @@ const rel = ts => {
   return Math.floor(s / 86400) + 'd ago'
 }
 const dur = ms => { const m = Math.max(0, Math.floor(ms / 60000)); return m < 60 ? m + 'm' : Math.floor(m / 60) + 'h' + (m % 60) + 'm' }
-
-function UserDetail({ id, onChanged, close }) {
-  const [d, setD] = useState(null)
-  const toast = useUI(s => s.toast)
-  useEffect(() => { api('/api/admin/user?id=' + encodeURIComponent(id)).then(setD).catch(e => toast(e.message)) }, [id])
-  if (!d) return <div className="muted small">Loading…</div>
-  const u = d.user
-  const setDisabled = disabled => {
-    api('/api/admin/user/disable', { method: 'POST', body: JSON.stringify({ id: u.id, disabled }) })
-      .then(() => { toast(disabled ? 'User disabled' : 'User enabled'); onChanged(); close() })
-      .catch(e => toast(e.message))
-  }
-  return <>
-    <h3 className="capitalize">{u.name}</h3>
-    <div className="row" style={{ gap: 6, flexWrap: 'wrap', margin: '8px 0 12px' }}>
-      {u.admin && <span className="tag acc">admin</span>}
-      {u.disabled && <span className="tag" style={{ color: 'var(--red)' }}>disabled</span>}
-      {u.invitedBy && <span className="tag">invite {u.invitedBy}</span>}
-      <span className="tag">joined {u.created ? fmtDate(u.created.slice(0, 10)) : '—'}</span>
-    </div>
-    <div className="tiles" style={{ textAlign: 'left' }}>
-      <div className="tile"><div className="l">Workouts</div><div className="v" style={{ fontSize: '1.1rem' }}>{d.workouts.length}</div></div>
-      <div className="tile"><div className="l">Weigh-ins</div><div className="v" style={{ fontSize: '1.1rem' }}>{d.bodyweight.length}</div></div>
-      <div className="tile"><div className="l">Routines</div><div className="v" style={{ fontSize: '1.1rem' }}>{d.routines.length}</div></div>
-      <div className="tile"><div className="l">Last sync</div><div className="v" style={{ fontSize: '.95rem' }}>{rel(d.lastSync)}</div></div>
-    </div>
-    {!u.admin && <button className={'btn ' + (u.disabled ? 'primary' : 'danger')} style={{ margin: '12px 0 4px' }}
-      onClick={() => u.disabled ? setDisabled(false)
-        : confirmSheet({ title: 'Disable ' + u.name + '?', message: 'They are signed out everywhere and can no longer sync or log in until re-enabled.', confirmText: 'Disable', danger: true, onConfirm: () => setDisabled(true) })}>
-      {u.disabled ? 'Enable account' : 'Disable account'}</button>}
-    <h4 className="sec">Workout history</h4>
-    {d.workouts.length ? <div className="list" style={{ gap: 0 }}>
-      {d.workouts.slice(0, 60).map(w => <div key={w.id} className="row between" style={{ padding: '9px 2px', borderBottom: '1px solid var(--sep)' }}>
-        <div><div className="small" style={{ fontWeight: 600 }}>{w.name}</div>
-          <div className="dim" style={{ fontSize: '.72rem' }}>{fmtDate(w.d, true)} · {fmtDur((w.end || w.start) - w.start)} · {setsDone(w)} sets{w.prs?.length ? ' · ' + w.prs.length + ' PR' : ''}</div></div>
-        <span className="small muted">{fmtVol(w.vol ?? workoutVolume(w), d.unit)}</span>
-      </div>)}
-    </div> : <div className="empty small">No workouts logged.</div>}
-  </>
-}
 
 function InvitesCard({ invites, reload }) {
   const toast = useUI(s => s.toast)
@@ -114,12 +73,30 @@ function AuditCard({ tick }) {
       .then(() => { toast('Activity log cleared'); pick(cat) }).catch(e => toast(e.message))
   })
 
+  const exportLog = () => api('/api/admin/audit/export')
+    .then(r => {
+      const jsonl = r.events.map(e => JSON.stringify(e)).join('\n') + '\n'
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(new Blob([jsonl], { type: 'application/x-ndjson' }))
+      a.download = 'opengym-activity-' + new Date().toISOString().slice(0, 10) + '.jsonl'
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+      toast(r.events.length + ' events exported')
+    })
+    .catch(e => toast(e.message || 'Export failed'))
+
   if (meta && !meta.enabled) return null      // AUDIT_LOG=0 — the card isn't there at all
 
   return <div className="card">
     <div className="row between"><h2 style={{ margin: 0 }}>Activity log</h2>
-      <button className="iconbtn" style={{ width: 32, height: 30, borderRadius: 8, fontSize: 15, color: 'var(--red)' }}
-        onClick={clear} aria-label="clear log"><Icon name="trash" /></button></div>
+      <div className="row" style={{ gap: 2 }}>
+        {/* ./data/audit.log already is the export for anyone with a shell — this is for whoever
+            only has the dashboard. Same JSONL, so jq still reads it. */}
+        <button className="iconbtn" style={{ width: 32, height: 30, borderRadius: 8, fontSize: 15 }}
+          onClick={exportLog} aria-label="export log"><Icon name="download" /></button>
+        <button className="iconbtn" style={{ width: 32, height: 30, borderRadius: 8, fontSize: 15, color: 'var(--red)' }}
+          onClick={clear} aria-label="clear log"><Icon name="trash" /></button>
+      </div></div>
     <div className="small muted" style={{ margin: '6px 0 10px' }}>
       {meta ? fmtNum(meta.total) + ' events'
         + (meta.retention.days ? ' · last ' + meta.retention.days + ' days' : '')
@@ -151,20 +128,23 @@ export default function Admin() {
   const nav = useNavigate()
   const user = useStore(s => s.user)
   const toast = useUI(s => s.toast)
-  const openSheet = useUI(s => s.openSheet)
   const [users, setUsers] = useState(null)
+  const [live, setLive] = useState(null)
   const [invites, setInvites] = useState(null)
   const [inviteOnly, setInviteOnly] = useState(false)
   const [tick, setTick] = useState(0)          // the ↻ button; the activity log listens to it
 
   const loadUsers = () => api('/api/admin/users').then(d => { setUsers(d.users); setInviteOnly(d.invite_only) }).catch(e => toast(e.message || 'Failed to load'))
   const loadInvites = () => api('/api/admin/invites').then(d => setInvites(d.invites)).catch(() => {})
-  // poll every 15s so the "training now" section stays live without a manual refresh
-  useEffect(() => { if (!user?.admin) return; loadUsers(); loadInvites(); const iv = setInterval(loadUsers, 15000); return () => clearInterval(iv) }, [])
+  // Only presence is polled. /api/admin/users reads and parses every user's state file, and it
+  // used to run on this timer purely to keep "training now" fresh — 240 full scans an hour for a
+  // number that lives in a Map. The heavy call now runs on mount, on ↻, and after a change.
+  const loadLive = () => api('/api/admin/presence').then(d => setLive(d.live)).catch(() => {})
+  useEffect(() => { if (!user?.admin) return; loadUsers(); loadInvites(); loadLive(); const iv = setInterval(loadLive, 15000); return () => clearInterval(iv) }, [])
   if (!user?.admin) return null
 
-  const openUser = id => openSheet(close => <UserDetail id={id} onChanged={loadUsers} close={close} />)
-  const liveUsers = (users || []).filter(u => u.live)
+  const openUser = id => nav('/admin/u/' + id)
+  const liveUsers = live || []
   const activeCount = (users || []).filter(u => u.lastSync && Date.now() - u.lastSync < 7 * 86400000).length
   const disabledCount = (users || []).filter(u => u.disabled).length
 
@@ -178,7 +158,7 @@ export default function Admin() {
 
     <div className="tiles" style={{ marginBottom: 12 }}>
       <div className="tile"><div className="l">Users</div><div className="v">{users ? users.length : '—'}</div></div>
-      <div className="tile"><div className="l">Training now</div><div className="v" style={{ color: liveUsers.length ? 'var(--acc)' : undefined }}>{users ? liveUsers.length : '—'}</div></div>
+      <div className="tile"><div className="l">Training now</div><div className="v" style={{ color: liveUsers.length ? 'var(--acc)' : undefined }}>{live ? liveUsers.length : '—'}</div></div>
       <div className="tile"><div className="l">Active 7d</div><div className="v">{users ? activeCount : '—'}</div></div>
       <div className="tile"><div className="l">Disabled</div><div className="v">{users ? disabledCount : '—'}</div></div>
     </div>
@@ -186,9 +166,9 @@ export default function Admin() {
     {liveUsers.length > 0 && <div className="card" style={{ borderColor: 'var(--acc)' }}>
       <h2 className="row" style={{ margin: '0 0 8px', gap: 6 }}><Icon name="dot" style={{ fontSize: 10, color: 'var(--green)' }} />Training now</h2>
       {liveUsers.map(u => <div key={u.id} className="row between" style={{ padding: '8px 2px', borderBottom: '1px solid var(--sep)' }} onClick={() => openUser(u.id)}>
-        <div><div className="small" style={{ fontWeight: 600 }}>{u.name}</div>
-          <div className="dim" style={{ fontSize: '.72rem' }}>{u.live.name} · ex {u.live.exIdx}/{u.live.exTotal} · {u.live.setsDone}/{u.live.setsTotal} sets</div></div>
-        <span className="tag acc">{dur(Date.now() - u.live.startedAt)}</span>
+        <div><div className="small" style={{ fontWeight: 600 }}>{u.user}</div>
+          <div className="dim" style={{ fontSize: '.72rem' }}>{u.workout} · ex {u.exIdx}/{u.exTotal} · {u.setsDone}/{u.setsTotal} sets</div></div>
+        <span className="tag acc">{dur(Date.now() - u.startedAt)}</span>
       </div>)}
     </div>}
 
