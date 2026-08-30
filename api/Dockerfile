@@ -18,7 +18,12 @@ LABEL maintainer="Duarte Santos https://gitlab.com/DuarteSantos8" \
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev && npm cache clean --force
-COPY server.js push-messages.js verify-error.js ./
+# Every runtime module, not a hand-kept list: the list went stale the moment server.js
+# grew an import (user-summary, state-merge, snapshots, admin-write, admin-delete all
+# arrived without it), and the image built fine and then died on boot with
+# ERR_MODULE_NOT_FOUND. Tests are dropped again right after — they are not runtime.
+COPY *.js ./
+RUN rm -f ./*.test.js
 
 ENV NODE_ENV=production
 ENV PORT=3000

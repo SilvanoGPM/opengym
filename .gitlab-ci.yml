@@ -106,6 +106,34 @@ test:mcp:
       when: never
     - when: on_success
 
+test:api:
+  extends: .node
+  stage: test
+  cache:
+    key:
+      files:
+        - api/package-lock.json
+    paths:
+      - api/.npm
+  script:
+    - cd api
+    - npm ci --cache .npm --prefer-offline
+    - npm test
+    # The api image is a hand-picked COPY of source files, and that list has already gone
+    # stale once: five modules landed without it and the image built green, then died on
+    # boot with ERR_MODULE_NOT_FOUND. `node --check` does not catch it — a missing import
+    # only fails at resolution — so actually load the entrypoint the way the container does.
+    - node -e "import('./server.js').then(() => process.exit(0), e => { console.error(e); process.exit(1) })"
+  variables:
+    DATA_DIR: $CI_PROJECT_DIR/api/.ci-data
+  rules:
+    # A scheduled pipeline exists only to run `renovate` (bottom of this file) — it must not
+    # re-run the suite once a month for nothing.
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - when: on_success
+
+
 # --------------------------------------------------------------------------- images
 
 # Images land at registry.gitlab.com/duartesantos8/opengym/{api,web} and are what
