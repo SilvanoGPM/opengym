@@ -311,7 +311,82 @@ export const PT_BR_OVERRIDES = {
   'Workout updated': 'Treino atualizado',
   'No passwords': 'Sem senha',
   'Your data stays yours': 'Seus dados continuam seus',
-  'Works offline': 'Funciona offline'
+  'Works offline': 'Funciona offline',
+
+  // --- AI assistant ---
+  'AI assistant': 'Assistente de IA',
+  'API key forgotten': 'Chave de API esquecida',
+  'That did not work': 'Isso não funcionou',
+  '{0} requests': '{0} requisições',
+  'API key saved': 'Chave de API salva',
+  'Add your API key': 'Adicionar sua chave de API',
+  'Add your own API key in Settings to use this.': 'Adicione sua própria chave de API nas Configurações para usar isto.',
+  'Ask AI about this session': 'Perguntar à IA sobre este treino',
+  'Asking your AI assistant…': 'Perguntando ao seu assistente de IA…',
+  'Bring a key from Anthropic, OpenAI or Google and openGym can read your training back to you. Your workouts are sent to whichever provider you pick, and you pay them directly — nothing goes anywhere else.': 'Traga uma chave da Anthropic, da OpenAI ou do Google e o openGym passa a saber ler o seu treino. Seus treinos são enviados ao provedor que você escolher, e você paga direto para ele — não vai para mais lugar nenhum.',
+  'Could not remove it': 'Não foi possível remover',
+  'Could not save that': 'Não foi possível salvar',
+  'Create the key with a spending limit on the provider’s own dashboard. openGym can cap what it spends here — it cannot cap what the key does anywhere else.': 'Crie a chave com um limite de gastos no painel do próprio provedor. O openGym consegue limitar o que é gasto aqui — não consegue limitar o que a chave faz em qualquer outro lugar.',
+  'Forget my API key': 'Esquecer minha chave de API',
+  'Forget your API key?': 'Esquecer sua chave de API?',
+  'How that session went': 'Como foi esse treino',
+  'It is stored on this server, encrypted, and never sent back to your browser.': 'Ela fica guardada neste servidor, criptografada, e nunca volta para o seu navegador.',
+  'Nothing is sent anywhere until you do.': 'Nada é enviado para lugar nenhum até você fazer isso.',
+  'Paste your API key first': 'Cole primeiro a sua chave de API',
+  'Save key': 'Salvar chave',
+  'Spent this month': 'Gasto neste mês',
+  'That key was not accepted': 'Essa chave não foi aceita',
+  'The answer was cut short.': 'A resposta foi cortada.',
+  'This happens when the server’s secret was regenerated. Save the key again.': 'Isso acontece quando o segredo do servidor foi gerado de novo. Salve a chave outra vez.',
+  'This month’s spending cap has been reached. Raise it in Settings, or wait for the next month.': 'O limite de gastos deste mês foi atingido. Aumente nas Configurações, ou espere o mês seguinte.',
+  'Written by {0} — check it before you act on it.': 'Escrito por {0} — confira antes de agir com base nisso.',
+  'Your API key': 'Sua chave de API',
+  'Your key could not be read': 'Não foi possível ler sua chave',
+  'Your key is stored on this server, encrypted, and is never sent back to the browser. Spending is counted per UTC month and checked before each request — so the request that crosses the cap still goes through.': 'Sua chave fica guardada neste servidor, criptografada, e nunca volta para o navegador. O gasto é contado por mês UTC e verificado antes de cada requisição — por isso a requisição que ultrapassa o limite ainda passa.',
+  'Your saved API key could not be read. Open Settings and save it again.': 'Não foi possível ler a chave de API salva. Abra as Configurações e salve de novo.',
+  'openGym stops being able to reach your AI provider. Your key itself stays valid — revoke it with the provider if you want it dead.': 'O openGym deixa de conseguir alcançar seu provedor de IA. A chave em si continua válida — revogue com o provedor se quiser que ela morra.',
+
+  // --- AI: routine review and plan building ---
+  'Build me a plan': 'Monte um plano para mim',
+  'It did not come back with a usable plan. Try again, or ask for something more specific.': 'Não voltou com um plano utilizável. Tente de novo, ou peça algo mais específico.',
+  'It kept searching and never settled on a plan. Try asking for something more specific.': 'Ficou procurando e nunca chegou a um plano. Tente pedir algo mais específico.',
+  'It reads what you have trained lately and what equipment you have, then picks exercises from this app’s own library. Nothing is added until you have seen it.': 'Ele lê o que você treinou ultimamente e o equipamento que você tem, e então escolhe exercícios da biblioteca do próprio app. Nada é adicionado antes de você ver.',
+  'Looking through the exercise library…': 'Procurando na biblioteca de exercícios…',
+  'Optional: how many days, what you want to focus on, anything to avoid.': 'Opcional: quantos dias, em que você quer focar, o que evitar.',
+  'Replaces your current week. Your existing routines are kept either way.': 'Substitui sua semana atual. Suas rotinas atuais ficam de qualquer jeito.',
+  'This one takes longer — it searches the library first.': 'Esse demora mais — ele procura na biblioteca primeiro.',
+  'Use its weekly schedule': 'Usar a agenda semanal dele',
+  'Writing the plan…': 'Escrevendo o plano…',
+  '{0} exercise(s) it named do not exist in this library and were left out.': '{0} exercício(s) que ele citou não existem nesta biblioteca e ficaram de fora.',
+
+  // --- AI: free chat ---
+  'Ask about your training': 'Pergunte sobre o seu treino',
+  'It can read your routines, sessions, body weight and muscle balance — and nothing else. It cannot change anything.': 'Ele consegue ler suas rotinas, sessões, peso corporal e equilíbrio muscular — e nada além disso. Não consegue alterar nada.',
+  'What did I bench last week?': 'Quanto fiz no supino semana passada?',
+  'Your own AI, reading your own log.': 'Sua própria IA, lendo seu próprio registro.',
+
+  // --- AI: fill in one routine ---
+  'It did not come back with usable exercises. Try again, or ask for something more specific.': 'Não voltou com exercícios utilizáveis. Tente de novo, ou peça algo mais específico.',
+  'It goes by the name you gave it — “{0}” — plus your recent training and the equipment you have. Nothing is added until you have seen it.': 'Ele se guia pelo nome que você deu — “{0}” — mais seu treino recente e o equipamento que você tem. Nada é adicionado antes de você ver.',
+  'It kept searching and never settled on a routine. Try asking for something more specific.': 'Ficou procurando e nunca chegou a uma rotina. Tente pedir algo mais específico.',
+  'Optional: how many exercises, what to include, anything to avoid.': 'Opcional: quantos exercícios, o que incluir, o que evitar.',
+  'Writing the routine…': 'Escrevendo a rotina…',
+
+  // --- AI: swap one suggestion ---
+  'It could not find a different exercise for that slot.': 'Não conseguiu achar um exercício diferente para essa vaga.',
+
+  // --- AI: what the chat is doing right now ---
+  'Reading your routines…': 'Lendo suas rotinas…',
+  'Reading your week…': 'Lendo sua semana…',
+  'Reading your sessions…': 'Lendo seus treinos…',
+  'Reading your weigh-ins…': 'Lendo suas pesagens…',
+  'Working out your 1RMs…': 'Calculando seus 1RM…',
+  'Checking your muscle balance…': 'Verificando seu equilíbrio muscular…',
+
+  // --- AI: talking about one session ---
+  'How did this session go?': 'Como foi este treino?',
+  'It came back with nothing to say. Try again, or ask it something narrower.': 'Voltou sem nada a dizer. Tente de novo, ou pergunte algo mais restrito.',
+  'It ran out of room before it finished. Try asking something narrower.': 'Ficou sem espaço antes de terminar. Tente perguntar algo mais restrito.'
 }
 
 export default { ...pt, ...PT_BR_OVERRIDES }

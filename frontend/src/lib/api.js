@@ -20,7 +20,14 @@ export async function api(path, opts) {
   if (remoteToken) headers.Authorization = 'Bearer ' + remoteToken
   const r = await fetch(remoteBase + path, Object.assign({}, opts, { headers }))
   const data = await r.json().catch(() => ({}))
-  if (!r.ok) { const e = new Error(data.error || ('HTTP ' + r.status)); e.status = r.status; throw e }
+  // `code` travels alongside the message so a caller can branch on WHICH failure it was
+  // without matching on prose — prose that is translated in some places and not others.
+  if (!r.ok) {
+    const e = new Error(data.error || ('HTTP ' + r.status))
+    e.status = r.status
+    if (data.code) e.code = data.code
+    throw e
+  }
   return data
 }
 

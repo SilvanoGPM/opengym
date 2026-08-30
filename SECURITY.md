@@ -130,12 +130,29 @@ Read this before hosting openGym for anyone other than yourself.
 
 - **Nothing in `./data` is encrypted.** It holds `db.json` (users, passkey public keys, push
   subscriptions, invite codes), one `state-<uid>.json` per user with their complete workout
-  history and body-weight log, `audit.log`, `secret`, and `vapid.json`. Anyone who can read that folder — you,
+  history and body-weight log, `audit.log`, `secret`, `vapid.json`, and `ai-keys.json`. Anyone who can read that folder — you,
   whoever holds the backups, whoever gets into the host — can read every user's data, and with
   `secret` can mint a valid session cookie for any account. **If you host openGym for other
   people, they are trusting you exactly as much as they'd trust any server operator.** With the
   activity log on, `./data/audit.log` adds everyone's sign-in times to that — worth remembering
   before an archive of `./data` goes somewhere you don't run.
+- **The AI assistant sends training data off this box, and its encryption does not protect
+  you from whoever runs it.** Off unless the operator sets `AI_ENABLED=1`. Once it is on, any
+  signed-in person can save an API key for Anthropic, OpenAI or Google, and from then on the
+  sessions they ask about — and the surrounding context: recent training, muscle balance, best
+  estimated 1RMs — are sent to that provider, under that person's own account. openGym is a
+  proxy in the middle; it adds the key and forwards the request.
+
+  The key itself is encrypted at rest in `./data/ai-keys.json` (AES-256-GCM, under a key
+  derived from `./data/secret`), it is never returned by any route, and it never enters the
+  synced state, the backup export or the admin dashboard. Be clear about what that buys: it
+  protects a leaked copy of `ai-keys.json` on its own. **It does not protect you from the
+  operator** — anyone with a shell on the host holds both halves. And anyone who can sign in as
+  a user can spend that user's key through the app, up to their monthly cap. This is the one
+  vector on this list where the cost of a compromise is somebody's money rather than their
+  data. Regenerating `secret` invalidates every stored key along with every session; keys
+  become unreadable and people are asked to enter theirs again.
+
 - **Admins can read everything, and change it.** A user listed in `ADMIN_UIDS` (or flagged
   `admin: true` in `db.json`) gets every user's full history and body weight, and from the
   dashboard can also: restore or merge a state file into someone's account, import a CSV export

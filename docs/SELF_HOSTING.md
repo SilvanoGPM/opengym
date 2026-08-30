@@ -178,6 +178,31 @@ Note the difference from `VITE_IMG_BASE` / `VITE_GIF_BASE` (see Troubleshooting)
 build-time values baked into the frontend bundle, and setting them next to `docker compose` does
 nothing to an image you pulled.
 
+## 5b. The AI assistant (optional, off)
+
+Each person can bring their own API key from Anthropic, OpenAI or Google and have openGym read a
+session back to them. It is off until you say otherwise:
+
+```bash
+AI_ENABLED=1               # nothing about the feature exists until this is set
+AI_TIMEOUT_MS=120000       # how long to wait on a provider before giving up
+AI_MAX_TOKENS=4096         # hard ceiling on the output length of one request
+```
+
+**This is the one part of openGym that talks to a third party.** The MCP server (`mcp/`) is
+read-only and never opens a socket; this is the deliberate exception. When somebody uses it, the
+session they asked about — plus recent training, muscle balance and best estimated 1RMs — is
+sent to the provider **they** chose, on the key **they** pay for. Nothing is sent until a key is
+saved, and leaving `AI_ENABLED` unset is the only way to guarantee nobody on your instance turns
+it on. The monthly spending cap is per person, set in Settings, not here.
+
+Keys live in `./data/ai-keys.json`, encrypted with AES-256-GCM under a key derived from
+`./data/secret`. No route returns a saved key, and it never enters the synced state, the backup
+export or the admin dashboard. **Regenerating or losing `./data/secret` makes every saved key
+unreadable**, exactly as it already invalidates every session; Settings then says so and asks for
+the key again, rather than failing quietly. The honest limit is in [SECURITY.md](../SECURITY.md):
+whoever can read `./data` holds both halves, so this protects a leaked backup, not the operator.
+
 ## 6. Backups
 
 Everything is in `./data`:
@@ -187,7 +212,7 @@ tar czf opengym-backup-$(date +%F).tar.gz data/
 ```
 
 That archive contains all profiles, passkeys and workout history — and, if the activity log is
-on, `audit.log` with everyone's sign-in times. Worth knowing before you ship the archive to a
+on, `audit.log` with everyone's sign-in times, plus `ai-keys.json` and the `secret` that decrypts it. Worth knowing before you ship the archive to a
 backup service you don't run. Restore by unpacking it back into the project folder. (Individual
 users can also export their own data as JSON from Settings.)
 

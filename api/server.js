@@ -18,6 +18,14 @@ import { mergeState, replaceState } from './state-merge.js';
 import { SNAPSHOT_DIR, snapshotName, snapshotsFor, snapshotsToPrune } from './snapshots.js';
 import { canAdminWrite } from './admin-write.js';
 import { planUserDelete } from './admin-delete.js';
+import {
+  PROVIDERS, PROVIDER_IDS, MODELS, DEFAULT_MODEL, MODEL_RE,
+  endpointFor, costOf, errorOf, scrubKey, clampTokens
+} from './ai-providers.js';
+import {
+  emptyFile as aiEmptyFile, deriveKey, encryptKey, decryptKey, hintOf,
+  monthKey, emptySpend, budgetExceeded, applySpend
+} from './ai-keys.js';
 
 const PORT = +(process.env.PORT || 3000);
 const DATA = process.env.DATA_DIR || '/data';
@@ -56,9 +64,12 @@ db.subs = db.subs || [];
 db.invites = db.invites || [];
 const isAdmin = user => !!user && (user.admin === true || ADMIN_UIDS.includes(user.id));
 function saveDb() { atomicWrite(dbFile, JSON.stringify(db, null, 2)); }
-function atomicWrite(file, content) {
+function atomicWrite(file, content, mode) {
   const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, content);
+  // The temp file inherits the caller's umask unless told otherwise, and rename carries that
+  // through — so a secret written by this helper would land 0644 while `secret` and
+  // `vapid.json`, which use writeFileSync directly, are 0600. Callers holding a secret pass 0o600.
+  fs.writeFileSync(tmp, content, mode ? { mode } : undefined);
   fs.renameSync(tmp, file);
 }
 const stateFile = uid => path.join(DATA, 'state-' + uid.replace(/[^a-zA-Z0-9_-]/g, '') + '.json');
@@ -99,6 +110,8 @@ function listSnapshots(uid) {
     });
   } catch { return []; }
 }
+// Takes the state object and nothing else — which is why the AI key, living in its own file
+// rather than in the state, is not in any snapshot. Keep it that way.
 function takeSnapshot(uid, state) {
   const ts = Date.now();
   fs.mkdirSync(snapDir(), { recursive: true });
@@ -111,6 +124,58 @@ function pruneSnapshots(uid) {
       try { fs.unlinkSync(path.join(snapDir(), f)); } catch {}
     }
   } catch {}
+}
+
+/* ---------- AI assistant (optional, the user brings their own API key) ---------- */
+
+/* OFF unless the operator turns it on, and that default is the point. Everything else in
+   openGym stays inside the box — the README says so about the MCP server in as many words —
+   and this is the one feature where training data leaves it, for a third party the user picks
+   and pays. An instance meant for a group should be able to guarantee nobody switches that on.
+
+   The server is a proxy and nothing more. It does not know what a routine or an exercise is:
+   the client builds the whole provider request (it has the catalogue and the training helpers;
+   this container cannot even see them) and the server adds the one thing the client must never
+   hold — the decrypted key — plus the fixed endpoint, the token ceiling and the spend. */
+const AI_ENABLED = /^(1|true|yes|on)$/i.test(process.env.AI_ENABLED || '');
+const AI_TIMEOUT_MS = Math.max(5000, +(process.env.AI_TIMEOUT_MS || 120000) || 120000);
+const AI_MAX_TOKENS = Math.max(256, +(process.env.AI_MAX_TOKENS || 4096) || 4096);
+// Well under MAX_BODY (5 MiB): that limit exists for a backup restore, and a conversation
+// anywhere near it is a runaway, not a request. Refusing early gives a message worth reading.
+const AI_MAX_REQUEST = 256 * 1024;
+
+const aiFile = path.join(DATA, 'ai-keys.json');
+let aiStore;
+try { aiStore = JSON.parse(fs.readFileSync(aiFile, 'utf8')); } catch { aiStore = null; }
+if (!aiStore || !aiStore.keys || !aiStore.kdf) aiStore = aiEmptyFile();
+const AI_DEK = deriveKey(SECRET, aiStore.kdf.salt);
+const saveAi = () => atomicWrite(aiFile, JSON.stringify(aiStore, null, 2), 0o600);
+
+/* One call in flight per user. This is the first route in this server that spends the person's
+   money on every request, so a double-tapped button must not buy two answers. */
+const aiBusy = new Set();
+
+/* What Settings renders from. The price table travels with it rather than being copied into the
+   frontend: the server is what enforces the cap, so a second copy could only ever drift from
+   the one doing the enforcing. The key itself has no route that returns it — `hint` is the last
+   four characters, which is all a masked display needs. */
+function aiStatus(uid) {
+  const base = {
+    enabled: AI_ENABLED, providers: PROVIDER_IDS, models: MODELS,
+    defaults: DEFAULT_MODEL, maxTokens: AI_MAX_TOKENS
+  };
+  const rec = aiStore.keys[uid];
+  if (!rec) return { ...base, configured: false, readable: false };
+  return {
+    ...base,
+    configured: true,
+    // Distinguished from "not configured" on purpose: a regenerated DATA/secret leaves a record
+    // that cannot be decrypted, and "save it again" is a very different message from "set it up".
+    readable: decryptKey(AI_DEK, uid, rec.provider, rec) != null,
+    provider: rec.provider, model: rec.model, hint: rec.hint,
+    capUSD: rec.capUSD || 0,
+    spend: rec.spend && rec.spend.month === monthKey() ? rec.spend : emptySpend()
+  };
 }
 
 /* ---------- push notifications (Web Push / VAPID) ---------- */
@@ -588,7 +653,7 @@ const routes = {
   'GET /api/health': async (req, res) => json(res, 200, { ok: true, users: db.users.length }),
 
   // Public config the login screen needs before anyone is signed in.
-  'GET /api/config': async (req, res) => json(res, 200, { invite_only: INVITE_ONLY, allow_guest: ALLOW_GUEST }),
+  'GET /api/config': async (req, res) => json(res, 200, { invite_only: INVITE_ONLY, allow_guest: ALLOW_GUEST, ai_enabled: AI_ENABLED }),
 
   'GET /api/me': async (req, res) => {
     const user = readSession(req);
@@ -880,6 +945,160 @@ const routes = {
     json(res, 200, { ok: true });
   },
 
+  /* ---------- AI assistant ---------- */
+  // No GET for the key, by construction: nothing returns it once it is saved. Replacing it is a
+  // POST that overwrites; forgetting it is the DELETE. Both are non-GET, so csrfOk covers them
+  // without any of this needing to know about CSRF.
+
+  'GET /api/ai/status': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    json(res, 200, aiStatus(user.id));
+  },
+
+  'POST /api/ai/key': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    if (!AI_ENABLED) return json(res, 403, { code: 'ai-off', error: 'the AI assistant is switched off on this server' });
+    const body = await readBody(req);
+    const provider = String(body.provider || '');
+    if (!PROVIDERS[provider]) return json(res, 400, { error: 'unknown provider' });
+    const key = String(body.key || '').trim();
+    if (key.length < 8) return json(res, 400, { error: 'that does not look like an API key' });
+    const model = String(body.model || DEFAULT_MODEL[provider] || '');
+    if (!MODEL_RE.test(model)) return json(res, 400, { error: 'bad model id' });
+    const prev = aiStore.keys[user.id];
+    aiStore.keys[user.id] = {
+      provider, model,
+      capUSD: Math.max(0, Math.min(1000, +body.capUSD || 0)),
+      hint: hintOf(key),
+      ...encryptKey(AI_DEK, user.id, provider, key),
+      created: new Date().toISOString(),
+      // The month's spend survives a key change. Rotating a key is not a way to reset the cap,
+      // and someone replacing a revoked key mid-month has not spent any less than they had.
+      spend: (prev && prev.spend) || emptySpend()
+    };
+    saveAi();
+    audit(req, 'ai.key.set', { user, msg: provider + '/' + model });
+    json(res, 200, { ok: true, ...aiStatus(user.id) });
+  },
+
+  // Model and cap, without re-sending the key. Separate from POST /api/ai/key so that changing
+  // which model you use does not require pasting a secret you can no longer read back.
+  'POST /api/ai/settings': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    const rec = aiStore.keys[user.id];
+    if (!rec) return json(res, 400, { code: 'ai-nokey', error: 'no API key saved' });
+    const body = await readBody(req);
+    if (body.model !== undefined) {
+      const model = String(body.model || '');
+      if (!MODEL_RE.test(model)) return json(res, 400, { error: 'bad model id' });
+      rec.model = model;
+    }
+    if (body.capUSD !== undefined) rec.capUSD = Math.max(0, Math.min(1000, +body.capUSD || 0));
+    saveAi();
+    json(res, 200, aiStatus(user.id));
+  },
+
+  'DELETE /api/ai/key': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    if (aiStore.keys[user.id]) { delete aiStore.keys[user.id]; saveAi(); }
+    audit(req, 'ai.key.clear', { user });
+    json(res, 200, { ok: true, ...aiStatus(user.id) });
+  },
+
+  // The proxy. `body` arrives already shaped for the provider by the client — this handler adds
+  // the key, pins the endpoint, caps the output length, and prices what came back.
+  'POST /api/ai/chat': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    if (!AI_ENABLED) return json(res, 403, { code: 'ai-off', error: 'the AI assistant is switched off on this server' });
+
+    const rec = aiStore.keys[user.id];
+    if (!rec) return json(res, 400, { code: 'ai-nokey', error: 'no API key saved' });
+    const key = decryptKey(AI_DEK, user.id, rec.provider, rec);
+    if (!key) {
+      // Almost always a regenerated or restored-without DATA/secret. Say which, once, so the
+      // operator reading the log sees the cause rather than a wall of failed calls.
+      audit(req, 'ai.key.unreadable', { user, msg: rec.provider });
+      return json(res, 400, { code: 'ai-unreadable', error: 'your saved API key could not be read — save it again' });
+    }
+
+    const body = await readBody(req);
+    const provider = String(body.provider || rec.provider);
+    if (provider !== rec.provider) return json(res, 400, { error: 'the saved key is for a different provider' });
+    const model = String(body.model || rec.model);
+    const payload = body.body;
+    if (!payload || typeof payload !== 'object') return json(res, 400, { error: 'missing request body' });
+
+    const wire = JSON.stringify(clampTokens(provider, payload, AI_MAX_TOKENS));
+    if (wire.length > AI_MAX_REQUEST) return json(res, 413, { code: 'ai-too-long', error: 'that conversation is too long to send' });
+
+    // Checked before the call, and the cost is only known after it — so the call that crosses
+    // the line is allowed to finish. The UI says this out loud rather than pretending otherwise.
+    if (budgetExceeded(rec)) return json(res, 402, { code: 'ai-cap', error: 'this month’s spending cap has been reached' });
+    if (aiBusy.has(user.id)) return json(res, 429, { code: 'ai-busy', error: 'one request at a time' });
+
+    aiBusy.add(user.id);
+    /* Give up on the provider the moment the browser gives up on us.
+
+       Without this, cancelling in the app only stops the app WAITING: the request is already in
+       flight, so the provider runs to completion, bills for it, and answers nobody. `close`
+       fires on a normal finish too, hence the writableEnded guard. */
+    const gone = new AbortController();
+    const onClose = () => { if (!res.writableEnded) gone.abort(); };
+    res.on('close', onClose);
+    try {
+      const r = await fetch(endpointFor(provider, model), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...PROVIDERS[provider].headers(key) },
+        body: wire,
+        // web-push needed the same guard for the same reason: a peer that accepts the socket and
+        // then says nothing would otherwise hold this handler open forever.
+        signal: AbortSignal.any([gone.signal, AbortSignal.timeout(AI_TIMEOUT_MS)])
+      });
+      const text = await r.text();
+      let reply = null;
+      try { reply = JSON.parse(text) } catch { /* provider sent something that is not JSON */ }
+      if (!r.ok || !reply) {
+        return json(res, r.status >= 400 && r.status < 600 ? r.status : 502,
+          { code: 'ai-provider', error: errorOf(r.status, reply, text.slice(0, 200)) });
+      }
+
+      // Priced whatever the stop reason was: a turn that ended in a tool call burned tokens
+      // exactly like one that ended in an answer. Accounting is per HTTP request, not per
+      // conversation — the conversation is the client's business.
+      const usage = PROVIDERS[provider].usageOf(reply);
+      const usd = costOf(provider, model, usage);
+      applySpend(rec, usage, usd);
+      saveAi();
+      audit(req, 'ai.chat', {
+        user,
+        msg: provider + '/' + model + ' in=' + usage.in + ' out=' + usage.out +
+          ' ' + (usd == null ? 'unpriced' : '$' + usd.toFixed(4))
+      });
+      json(res, 200, { reply, usage, usd, spend: rec.spend });
+    } catch (e) {
+      // A call that died mid-flight is not charged: the tokens it burned are unknown, and
+      // guessing at them would put a wrong number in front of the cap. Undercount on purpose.
+      if (e && e.status) return json(res, e.status, { error: e.message });
+      // Cancelled by the person who asked: nothing to say, and nobody left to say it to. The
+      // tokens it burned are unknown, so it is not charged either — the same undercount a
+      // dropped connection already produces.
+      if (gone.signal.aborted) return;
+      const timedOut = e && (e.name === 'TimeoutError' || e.name === 'AbortError');
+      return json(res, timedOut ? 504 : 502, {
+        code: timedOut ? 'ai-timeout' : 'ai-network',
+        error: timedOut ? 'the provider did not answer in time' : scrubKey((e && e.message) || 'request failed')
+      });
+    } finally {
+      res.off('close', onClose);
+      aiBusy.delete(user.id);
+    }
+  },
+
   /* ---------- admin dashboard ---------- */
   // Who is training right now, and nothing else. Split out of /api/admin/users because presence
   // is the only part the dashboard wants on a 15s timer, and this reads a Map in memory instead
@@ -1109,6 +1328,9 @@ const routes = {
     rowCache.delete(u.id);
     try { fs.unlinkSync(stateFile(u.id)); } catch {}
     for (const f of listSnapshotFiles(u.id)) { try { fs.unlinkSync(path.join(DATA, SNAPSHOT_DIR, f)); } catch {} }
+    // The AI key lives outside the state file, so it is the one thing here that would survive a
+    // deleted account — an encrypted blob for a uid that no longer exists, forever.
+    if (aiStore.keys[u.id]) { delete aiStore.keys[u.id]; saveAi(); }
     audit(req, 'admin.user.delete', { user: admin, target, msg: `workouts=${counts.workouts} creds=${plan.removed.creds} subs=${plan.removed.subs}` });
     json(res, 200, { ok: true, removed: plan.removed });
   },

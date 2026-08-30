@@ -7,7 +7,7 @@ import { uid } from '../lib/format.js'
 import { t, exerciseNameFor } from '../lib/i18n.js'
 import { supersetUnits, cleanupSg, exLine } from '../lib/history.js'
 import { Thumb } from '../components/Media.jsx'
-import { glyphPicker, exercisePicker, exConfigSheet, confirmSheet } from '../sheets.jsx'
+import { glyphPicker, exercisePicker, exConfigSheet, confirmSheet, analyseRoutineSheet, buildRoutineExercisesSheet, aiOffered } from '../sheets.jsx'
 import Icon from '../components/Icon.jsx'
 import { glyphOf } from '../lib/glyphs.js'
 import { Button, SelectRow } from '../components/ui.jsx'
@@ -111,7 +111,17 @@ export default function RoutineEdit() {
     })()}
 
     <div className="small dim row" style={{ margin: '10px 2px', gap: 5 }}><Icon name="link" style={{ fontSize: 13 }} />{t('Tap the link button on an exercise to superset it with the one above — you’ll do them back-to-back.')}</div>
-    <Button variant="primary" onClick={() => exercisePicker(ex => exConfigSheet(ex, null, cfg => edit(x => { x.push({ id: ex.id, ...cfg }) }), null, r))} icon="plus">{t('Add exercise')}</Button>
+    <Button variant={r.ex.length ? 'primary' : 'plain'} onClick={() => exercisePicker(ex => exConfigSheet(ex, null, cfg => edit(x => { x.push({ id: ex.id, ...cfg }) }), null, r))} icon="plus">{t('Add exercise')}</Button>
+    {/* Only while it is empty. Once there are exercises the question is no longer "what goes in
+        here" but "is this any good", which is what the review button below answers. */}
+    {aiOffered() && !r.ex.length && <>
+      <div style={{ height: 8 }} />
+      <Button variant="primary" icon="sparkles" onClick={() => buildRoutineExercisesSheet(id)}>{t('Fill it in with AI')}</Button>
+    </>}
+    {aiOffered() && r.ex.length > 0 && <>
+      <div style={{ height: 10 }} />
+      <Button icon="sparkles" onClick={() => analyseRoutineSheet(id)}>{t('What does the AI make of this routine?')}</Button>
+    </>}
     <div style={{ height: 10 }} />
     <Button variant="danger" onClick={() => confirmSheet({
       title: t('Delete routine?'), message: t('“{0}” and its exercises will be removed.', r.name), confirmText: t('Delete'), danger: true,

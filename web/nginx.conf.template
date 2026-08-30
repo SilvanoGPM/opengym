@@ -25,6 +25,12 @@ server {
         # with an HTML page the client cannot parse. A backup restore of a long history is the
         # request that reaches this size.
         client_max_body_size 8m;
+        # nginx defaults to 60s, which is fine for every other route here and too short for one:
+        # /api/ai/chat waits on a third-party model, and a slow answer would come back as a 504
+        # with an HTML body the app cannot parse — so the user would see "HTTP 504" instead of
+        # the answer that was still on its way. The API has its own AI_TIMEOUT_MS below this.
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
         proxy_pass http://${BACKEND}:${PORT};
         proxy_http_version 1.1;
         proxy_set_header Host $host;

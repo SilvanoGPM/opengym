@@ -23,11 +23,60 @@ import { nextPrescription, applyPrescription, policyFor, defaultIncrement, POLIC
 import { MOBILE, shareExport } from './lib/mobile.js'
 import { buildCompletedWorkout, backdatedStart, insertWorkout, nextExWeight } from './lib/finish-workout.js'
 import { isWarmupRow } from './lib/workout-model.js'
+import { analyseRoutineRequest } from './lib/ai/actions.js'
+import AiSheet from './components/AiSheet.jsx'
+import AiPlanSheet from './components/AiPlanSheet.jsx'
+import AiRoutineSheet from './components/AiRoutineSheet.jsx'
 
 const S = () => useStore.getState().S
 const update = (...a) => useStore.getState().update(...a)
 const ui = () => useUI.getState()
 const toast = m => ui().toast(m)
+
+/* The AI assistant is off unless the operator switched it on (AI_ENABLED, reported by
+   /api/config) and there is a profile to hang a key on — guest mode never talks to a server.
+   Whether a key is actually saved is AiSheet's problem: asking here would cost a request every
+   time somebody opened a workout. */
+const aiOffered = () => {
+  const st = useStore.getState()
+  return !!st.config?.ai_enabled && !!st.user
+}
+
+/**
+ * Open a conversation about one finished session.
+ *
+ * It used to be a sheet with a single answer in it, which made the most interesting moment — the
+ * one right after reading the verdict — a dead end. The analysis is the same; it now arrives as
+ * the first message of a chat that can be carried on, with the tools available for whatever
+ * comes next.
+ */
+export function evaluateWorkoutSheet(w) {
+  const id = typeof w === 'string' ? w : w?.id
+  if (!id) return
+  nav('/ask', { state: { seed: { kind: 'workout', id } } })
+}
+
+/** …and what it makes of a routine they already train. */
+export function analyseRoutineSheet(routineId) {
+  const st = S()
+  const request = analyseRoutineRequest(st, routineId, { lang: st.lang })
+  if (!request) return
+  ui().openSheet(close => <AiSheet title={t('What I make of this routine')} request={request} close={close} />)
+}
+
+/** Build a whole training week. Writes, and asks first. */
+export function buildPlanSheet() {
+  // exerciseDetailSheet is passed in rather than imported: sheets.jsx already imports these
+  // components, so reaching back the other way would close an import cycle.
+  ui().openSheet(close => <AiPlanSheet close={close} onInspect={exerciseDetailSheet} />)
+}
+
+/** Fill in one routine the user has already created and named. Writes, and asks first. */
+export function buildRoutineExercisesSheet(routineId) {
+  ui().openSheet(close => <AiRoutineSheet routineId={routineId} close={close} onInspect={exerciseDetailSheet} />)
+}
+
+export { aiOffered }
 const snd = () => S().sound
 
 /* ============================ custom confirm dialog ============================ */
@@ -979,6 +1028,10 @@ function WorkoutDetail({ w, close }) {
       placeholder={t('How the session went as a whole.')}
       onChange={e => setNote(e.target.value)} onBlur={saveNote} />
     <div style={{ height: 14 }} />
+    {aiOffered() && <>
+      <Button icon="sparkles" onClick={() => { saveNote(); close(); evaluateWorkoutSheet(w) }}>{t('Talk about this session')}</Button>
+      <div style={{ height: 8 }} />
+    </>}
     <Button icon="pencil" onClick={() => { saveNote(); close(); nav('/history/w/' + w.id) }}>{t('Edit workout')}</Button>
     <div style={{ height: 8 }} />
     <Button variant="danger" onClick={() => confirmSheet({ title: t('Delete workout?'), message: t('This removes it from your history for good.'), confirmText: t('Delete'), danger: true, onConfirm: () => { update(s => { s.workouts = s.workouts.filter(x => x.id !== w.id) }); close(); toast(t('Workout deleted')) } })}>{t('Delete workout')}</Button>

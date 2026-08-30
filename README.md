@@ -88,6 +88,14 @@ as a home-screen app, passkey sign-in, offline support, sync across your phone a
 - 📥 **Bring your history with you** — import from **FitNotes** (Android and iOS), **Strong** and **Hevy**, or body weight straight out of an **Apple Health** export. Exercise names are matched against the library and anything unrecognised becomes one of your own exercises, so nothing in the file is dropped
 - 📦 **Yours to keep** — one-tap JSON export/import, guest mode, **no telemetry**
 - 🤖 **Ask an AI about your training** (optional) — an [MCP server](mcp/README.md) lets a client like Claude Desktop or Cursor read your history in your own words: *"what did I bench last week?"*. Read-only, spawned locally by the client, nothing leaves your box. Not in the Docker build — if you don't use an AI assistant, it isn't there
+- 🧠 **A coach that reads your log** (optional, off by default) — switch on `AI_ENABLED` and each
+  person can add their own Anthropic, OpenAI or Google API key in Settings to have their sessions
+  read back and judged. Unlike the MCP server above, this one **does** leave your box: the workout
+  goes to the provider that person picked, on the key they pay for, and nothing is sent until
+  somebody saves a key. Their key is encrypted at rest and never leaves the server — and each
+  person sets their own monthly spending cap. It can judge a session, review a routine, build you
+  a training week (shown in full before anything is saved), or answer questions about your own
+  log. Judging one session costs around a US cent
 - 📱 **Standalone Android app** — the whole tracker as a sideloadable APK: no account, no server, data on the phone, native workout reminders ([download](https://opengym.duarte-santos.ch))
 
 ## Quick start (self-host)

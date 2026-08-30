@@ -1,5 +1,124 @@
 # Changelog
 
+## Unreleased
+
+### An AI assistant, if you want one
+
+- 🧠 **Bring your own API key and have a session read back to you.** Off unless the operator sets
+  `AI_ENABLED=1`; then each person adds their own Anthropic, OpenAI or Google key in Settings, and
+  a finished workout grows an "Ask AI about this session" button. The context it gets is built by
+  the same functions the Stats screen uses — `workoutVolume`, `estimate1RM`, the muscle map — so
+  the numbers it reasons about are the numbers on your screen, warm-ups excluded and drop-sets
+  counted once. Judging a session costs about a US cent, and each person sets their own monthly cap.
+- 🔐 **The key is encrypted at rest and never comes back out.** `data/ai-keys.json`, AES-256-GCM
+  under a key derived from `data/secret`, bound to its owner so a blob moved between users fails
+  to decrypt. No route returns it; Settings shows the last four characters. It never enters the
+  synced state, so it is not in the backup export or the admin dashboard either. Regenerating
+  `data/secret` makes saved keys unreadable — Settings says exactly that instead of failing quietly.
+- 🌐 **This is the one feature that leaves your box, and it says so.** The README, SECURITY.md and
+  the self-hosting guide now separate the two: the MCP server still never opens a socket, and this
+  one sends your training to the provider you picked, on the key you pay for.
+- 🏗️ **It can build you a training week.** Plan → "Build with AI". It searches the app's
+  own exercise library rather than being handed it, so **every exercise id it uses is one the
+  library returned** — it cannot invent a movement that does not exist. The plan is shown in full
+  before anything is written, and it lands through `mergePlan`, the same import path a shared plan
+  file uses: fresh ids, and your existing routines are never overwritten. It never prescribes a
+  weight; the progression engine already knows what you lift.
+- 🧱 **An empty routine can fill itself in.** Create a routine, name it, and while it has no
+  exercises the screen offers "Fill it in with AI" — the name is the brief, so a routine called
+  "Peito e tríceps" gets chest and triceps work rather than somebody else's idea of a good day.
+  You can add a sentence of your own on top. Same three layers of validation as the full plan
+  builder, and the exercises are shown before any of them are added. The button disappears once
+  the routine has something in it, and the review button takes its place.
+- 🔍 **It can review a routine you already train.** The routine screen asks what the AI makes of
+  it: the plan, how often it has actually been trained, and which muscles it leaves out.
+- 💬 **You can just ask it things.** Home → "Ask about your training", built as a chat: your
+  question sits on the right in your accent colour, the answer runs full width underneath, and
+  the composer floats above the tab bar the way the rest timer does. Only one side gets a
+  bubble — a question is speech, an answer is several paragraphs, and a container around those
+  reads as a card. It has read-only tools for
+  your routines, sessions, body weight, 1RM estimates and muscle balance, and it uses them rather
+  than being handed your whole profile up front — so a question about last Tuesday costs a
+  question about last Tuesday. The conversation is never stored: not in your synced state, not in
+  the backup, not in the admin dashboard.
+- 🗣️ **"Talk about this session" is a conversation now, not a verdict.** The analysis is the
+  same and it still arrives on its own — but it lands as the first message of a chat you can
+  carry on, with the read-only tools available for whatever the answer makes you want to ask
+  next. It used to be a sheet with one answer in it, which made the most interesting moment,
+  the one right after reading the verdict, a dead end.
+- 🔇 **An answer that came back empty showed nothing at all.** On a reasoning model the whole
+  output allowance can go on thinking, leaving a turn with no text in it. The screen then
+  showed the question and silence beneath it — which reads as a broken app rather than a model
+  that ran out of room. It now says which of the two happened.
+- 🏋️ **"What's my bench PR?" said you had none, while you were benching every week.** Asked
+  about a movement, the assistant searched the exercise LIBRARY, got the one canonical barbell
+  bench press, found no record of it, and reported that back — when the presses actually in the
+  log were a decline bar and a seated dumbbell press. The library knows every exercise that
+  exists; the question was about the fifteen you do. `estimate_1rm` now takes a plain word in
+  any language and matches it against **your own history**, reporting every variation with the
+  best first, and there is a new `list_trained_exercises` for what you actually train. An id
+  you have never logged now says so, instead of implying the exercise has no PR.
+- 🔎 **The exercise search matched equipment by exact string, and that broke plan building.**
+  "dumbbells", "Dumbbell", "machine", "cables", "cable machine" — every wording a model actually
+  writes returned nothing at all, and an empty result says nothing about why, so it rephrased,
+  failed again, and spent the whole step budget on searches that could never have succeeded.
+  Equipment now resolves loosely ("barbells" reaches the EZ and olympic bars, "machine" reaches
+  all of them), the tool declares the real vocabulary as an enum instead of describing it, and a
+  search that finds nothing now says WHY — a bad filter, an unknown word, or the equipment
+  profile getting in the way.
+- 🛑 **Anything the AI is doing can be cancelled.** Sent by accident, or asked the wrong
+  thing — every waiting state now has a Cancel button. It does not merely stop the app waiting:
+  aborting closes the connection, and the server drops the call to the provider when that
+  happens, so a cancelled request stops costing money instead of running to completion for
+  nobody. In a tool loop it also stops the next round trip, which is where the cost actually is.
+  Cancelling a plan takes you back to what you typed, so you can fix it rather than start over.
+- 🖼️ **Suggested exercises show their picture, and open before you accept them.** Every row
+  in an AI preview carries the same thumbnail the rest of the app uses and taps through to the
+  full exercise sheet — animation, muscles, equipment, instructions — so you can judge a movement
+  you have never heard of before it goes into your plan.
+- 🔀 **Any single suggestion can be swapped.** A shuffle button on each row asks for a different
+  exercise for that slot only, told what the rest of the plan already contains so it cannot hand
+  back something two rows above. It is the cheapest call the feature makes, and a swap that
+  fails leaves the original in place.
+- 🧱 **The library search ranks by what an exercise actually trains.** The muscle map counts
+  secondary involvement, right for a body map and wrong for picking exercises — a search for chest
+  was returning the dumbbell arnold press. It now ranks by how much the exercise works the muscle
+  you asked for.
+
+### Fixed
+
+- 🔄 **Building a routine or a plan always failed with "it kept searching and never settled".**
+  Every provider returns items in an assistant turn that mean nothing to this app and everything
+  to the model — OpenAI's reasoning items, Anthropic's thinking blocks — and every one of them
+  documents that they must be sent back unchanged on the next turn. They were being dropped, so
+  the model lost its own train of thought between turns, started the task over, made one more
+  small search, and ran until the step cap. They now ride along untouched and are replayed only
+  to the provider that made them. Single-answer features were never affected, because they only
+  ever take one turn.
+- 🚶 **The step cap was too low for the plan builders anyway.** Six round trips is right for
+  "search three muscle groups and answer", and not for a routine that needs a search per muscle.
+  Those callers raise it; hitting the cap there was the task, not a runaway.
+- ✂️ **AI answers were being cut off mid-sentence.** On a reasoning model the output ceiling
+  covers the model's own invisible reasoning as well as the answer, so it could spend the whole
+  budget thinking and get truncated — you paid for tokens you never read. The ceiling is higher
+  now, and the request asks for low reasoning effort where the provider supports it.
+- 🙃 **It opened with "good work" whatever you did.** An assessment that always says well done
+  is not an assessment. It now leads with a verdict, treats praise as a claim needing evidence
+  against your own baseline, and is allowed to say a session was simply ordinary.
+- 🔁 **The AI sheet could hang on "asking…" forever in development.** StrictMode runs every
+  effect twice; the guard that stopped the second (paid) request also stopped the answer from
+  ever being rendered. Production never double-mounts, so it looked fine there.
+- 🧩 **`equipment.js` imported a translation function it never used**, and that one dead line
+  made every module reaching it unloadable outside Vite — the property the MCP server is built on.
+- 🐳 **The API image did not start.** `api/Dockerfile` copied a hand-kept list of three source
+  files, and v1.2.11 added five more modules to `server.js` without touching it. Building from
+  source produced an image that died on boot with `ERR_MODULE_NOT_FOUND` — prebuilt images from
+  the registry were unaffected, which is why it went unnoticed. It copies every runtime module now.
+- ✅ **`api/`'s own tests never ran in CI.** Seven test files, no job. There is one now, and it also
+  loads `server.js` the way the container does, which is the check that would have caught the above.
+- ⏱️ **nginx would have cut off a slow AI answer at 60 seconds** with an HTML 504 the app cannot
+  parse. `/api/` now allows 300s, under the API's own timeout.
+
 ## v1.2.11 — 2026-08-25
 
 A correction release. v1.2.10 landed planned warm-ups and notes, and reviewing that release

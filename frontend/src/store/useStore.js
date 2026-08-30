@@ -25,6 +25,11 @@ export const DEF = {
   // every time you do the movement ("seat 4, pin 7"). Distinct from a routine's `note`, which
   // belongs to one exercise in one plan, and from a session note, which belongs to one day.
   exNotes: {},
+  // Nothing about the AI assistant lives here, on purpose. The key obviously cannot — this
+  // object is synced to the server, written whole into the backup export and readable by an
+  // admin — but neither do the provider and model, because they are saved WITH the key in
+  // data/ai-keys.json and come back from GET /api/ai/status. A second copy here could only
+  // ever drift from the one the proxy actually uses.
 }
 const clone = o => JSON.parse(JSON.stringify(o))
 

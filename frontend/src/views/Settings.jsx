@@ -8,6 +8,7 @@ import { api, webauthnOK, passkeyLogin, passkeyRegister, IS_ANDROID } from '../l
 import { pushSupported, enablePush, disablePush, sendTestPush } from '../lib/push.js'
 import { wakeLockSupported } from '../lib/wakelock.js'
 import { t, LANGS, INSTR_LANGS } from '../lib/i18n.js'
+import { fmtUSD } from '../lib/ai/pricing.js'
 import { DEMO, REPO } from '../lib/demo.js'
 import { MOBILE, shareExport, syncReminder } from '../lib/mobile.js'
 import { ConnectSheet } from './MobileOnboarding.jsx'
@@ -166,6 +167,9 @@ export default function Settings() {
     {/* ---------- equipment ---------- */}
     <EquipmentCard S={S} update={update} />
 
+    {/* ---------- AI assistant (hidden unless the operator switched it on) ---------- */}
+    {user && <AiCard toast={toast} />}
+
     {/* ---------- appearance ---------- */}
     <Section title={t('Appearance')} footer={DEMO || MOBILE ? undefined : t('synced with your profile')}>
       <Row icon="moon" iconTint="var(--indigo)" title={t('Theme')}>
@@ -306,6 +310,151 @@ function MobileReminderCard({ S, update, toast }) {
       )}
     </Section>
   )
+}
+
+// The AI assistant: the user brings their own API key, and it never touches this device's
+// storage or the synced state. Everything here reflects GET /api/ai/status, which is the side
+// that holds the key and enforces the cap — there is no local copy to disagree with it.
+//
+// The whole card disappears when the operator has not switched the feature on (AI_ENABLED),
+// and it only renders for a signed-in profile: guest mode never talks to a server, so there
+// would be nowhere to keep a key.
+const AI_PROVIDER_NAME = { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Google Gemini' }
+// Dollars per month. A short list rather than a free number field: this is a guard rail, not a
+// budget, and the numbers people actually want are an order of magnitude apart, not a cent apart.
+const AI_CAPS = [0, 1, 5, 10, 25, 50]
+
+function AiCard({ toast }) {
+  const [st, setSt] = useState(null)
+
+  useEffect(() => { api('/api/ai/status').then(setSt).catch(() => { }) }, [])
+
+  if (!st || !st.enabled) return null
+
+  const provider = st.provider || st.providers[0]
+  const models = (st.models || {})[provider] || []
+  const spend = st.spend || {}
+
+  const openKeySheet = () => useUI.getState().openSheet(close =>
+    <AiKeySheet st={st} close={close} onSaved={next => { setSt(next); toast(t('API key saved')) }} toast={toast} />)
+
+  // Every setting goes through the same POST, which requires the key — so these re-send only the
+  // fields that changed and let the server keep the stored key. See POST /api/ai/key.
+  const patch = async body => {
+    try { setSt(await api('/api/ai/settings', { method: 'POST', body: JSON.stringify(body) })) }
+    catch (e) { toast(e.message || t('Could not save that')) }
+  }
+
+  const forget = () => confirmSheet({
+    title: t('Forget your API key?'),
+    message: t('openGym stops being able to reach your AI provider. Your key itself stays valid — revoke it with the provider if you want it dead.'),
+    confirmText: t('Forget it'),
+    danger: true,
+    onConfirm: async () => {
+      try { setSt(await api('/api/ai/key', { method: 'DELETE' })); toast(t('API key forgotten')) }
+      catch (e) { toast(e.message || t('Could not remove it')) }
+    }
+  })
+
+  return <Section
+    title={t('AI assistant')}
+    footer={st.configured
+      ? t('Your key is stored on this server, encrypted, and is never sent back to the browser. Spending is counted per UTC month and checked before each request — so the request that crosses the cap still goes through.')
+      : t('Bring a key from Anthropic, OpenAI or Google and openGym can read your training back to you. Your workouts are sent to whichever provider you pick, and you pay them directly — nothing goes anywhere else.')}
+  >
+    {!st.configured && (
+      <Row icon="key" iconTint="var(--acc)" title={t('Add your API key')}
+        subtitle={t('Nothing is sent anywhere until you do.')}
+        accessory="chevron" onClick={openKeySheet} />
+    )}
+
+    {/* A regenerated or restored-without data/secret. Every session died with it too, so this is
+        a known state — it just needs saying, because "not configured" would be a lie. */}
+    {st.configured && !st.readable && (
+      <Row icon="warning" iconTint="var(--red)" title={t('Your key could not be read')}
+        subtitle={t('This happens when the server’s secret was regenerated. Save the key again.')}
+        accessory="chevron" onClick={openKeySheet} />
+    )}
+
+    {st.configured && <>
+      <Row icon="key" iconTint="var(--acc)" title={AI_PROVIDER_NAME[provider] || provider}
+        subtitle={st.hint ? '····' + st.hint : null}
+        value={t('Replace')} accessory="chevron" onClick={openKeySheet} />
+
+      <SelectRow icon="sparkles" iconTint="var(--indigo)" title={t('Model')}
+        value={st.model}
+        options={models.map(m => ({ value: m.id, label: m.label }))}
+        onChange={v => patch({ model: v })}
+        sheetTitle={t('Model')} stackedValue />
+
+      <SelectRow icon="scale" iconTint="var(--teal)" title={t('Spending cap')}
+        value={st.capUSD || 0}
+        options={AI_CAPS.map(v => ({ value: v, label: v ? '$' + v + '/' + t('month') : t('No cap') }))}
+        onChange={v => patch({ capUSD: v })}
+        sheetTitle={t('Spending cap')} />
+
+      <Row icon="chart" iconTint="var(--blue)" title={t('Spent this month')}
+        subtitle={t('{0} requests', spend.calls || 0) +
+          (spend.unpriced ? ' · ' + t('{0} on a model with no price here', spend.unpriced) : '')}
+        value={fmtUSD(spend.usd || 0)} />
+
+      <Row icon="trash" iconTint="var(--red)" title={t('Forget my API key')} danger onClick={forget} />
+    </>}
+  </Section>
+}
+
+// Write-only by design: no route returns a saved key, so replacing it is the only thing this
+// sheet can do. The model and the cap are set on the card afterwards, which keeps this to the
+// two decisions that have to be made before anything can be saved at all.
+function AiKeySheet({ st, close, onSaved, toast }) {
+  const [provider, setProvider] = useState(st.provider || st.providers[0])
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const placeholder = { anthropic: 'sk-ant-…', openai: 'sk-…', gemini: 'AIza…' }[provider]
+
+  const save = async () => {
+    if (!key.trim()) { toast(t('Paste your API key first')); return }
+    setBusy(true)
+    try {
+      const next = await api('/api/ai/key', {
+        method: 'POST',
+        body: JSON.stringify({
+          provider,
+          // Keep the chosen model when replacing a key for the same provider; otherwise the
+          // provider's own default, since last time's model id means nothing to a new one.
+          model: provider === st.provider ? st.model : st.defaults[provider],
+          capUSD: st.capUSD || 5,
+          key: key.trim()
+        })
+      })
+      close()
+      onSaved(next)
+    } catch (e) { toast(e.message || t('That key was not accepted')) }
+    setBusy(false)
+  }
+
+  return <>
+    <h3>{t('Your API key')}</h3>
+    <div className="muted small" style={{ marginBottom: 14 }}>
+      {t('Create the key with a spending limit on the provider’s own dashboard. openGym can cap what it spends here — it cannot cap what the key does anywhere else.')}
+    </div>
+
+    <Segmented
+      options={st.providers.map(p => ({ value: p, label: { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Gemini' }[p] || p }))}
+      value={provider} onChange={setProvider} />
+
+    <div style={{ height: 12 }} />
+    <input className="input" type="password" autoComplete="off" spellCheck="false"
+      placeholder={placeholder} value={key} onChange={e => setKey(e.target.value)} />
+
+    <div className="dim small" style={{ marginTop: 8 }}>
+      {t('It is stored on this server, encrypted, and never sent back to your browser.')}
+    </div>
+
+    <div style={{ height: 12 }} />
+    <Button variant="primary" disabled={busy} onClick={save}>{t('Save key')}</Button>
+  </>
 }
 
 function PushCard({ S, update, toast }) {

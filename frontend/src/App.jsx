@@ -26,6 +26,7 @@ import History from './views/History.jsx'
 import WorkoutEdit from './views/WorkoutEdit.jsx'
 import Library from './views/Library.jsx'
 import Settings from './views/Settings.jsx'
+import AiChat from './views/AiChat.jsx'
 import Admin from './views/Admin.jsx'
 import AdminUser from './views/AdminUser.jsx'
 
@@ -98,6 +99,7 @@ function Shell() {
               <Route path="/history/w/:id" element={<WorkoutEdit />} />
               <Route path="/library" element={<Library />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/ask" element={<AiChat />} />
               <Route path="/admin" element={user?.admin ? <Admin /> : <Navigate to="/home" replace />} />
               <Route path="/admin/u/:id" element={user?.admin ? <AdminUser /> : <Navigate to="/home" replace />} />
               <Route path="*" element={<Navigate to="/home" replace />} />
