@@ -386,7 +386,25 @@ export const PT_BR_OVERRIDES = {
   // --- AI: talking about one session ---
   'How did this session go?': 'Como foi este treino?',
   'It came back with nothing to say. Try again, or ask it something narrower.': 'Voltou sem nada a dizer. Tente de novo, ou pergunte algo mais restrito.',
-  'It ran out of room before it finished. Try asking something narrower.': 'Ficou sem espaço antes de terminar. Tente perguntar algo mais restrito.'
+  'It ran out of room before it finished. Try asking something narrower.': 'Ficou sem espaço antes de terminar. Tente perguntar algo mais restrito.',
+
+  // --- ranking (cross-profile leaderboard) ---
+  'Compare check-ins and volume with the other profiles on this server.': 'Compare check-ins e volume com os outros perfis deste servidor.',
+  'Could not save the name': 'Não foi possível salvar o nome',
+  'Display name': 'Nome de exibição',
+  'How you compare with the other profiles here.': 'Como você está em relação aos outros perfis daqui.',
+  'Join it in Settings to compare check-ins and volume with the other profiles on this server. You can leave again at any time.': 'Entre nas Configurações para comparar check-ins e volume com os outros perfis deste servidor. Você pode sair quando quiser.',
+  'Loading…': 'Carregando…',
+  'One per day you trained — going twice in a day still counts once.': 'Um por dia em que você treinou — ir duas vezes num dia ainda conta uma vez.',
+  'Only your name, how many days you trained and your total volume are shared — never your exercises, your loads, your weight or your notes.': 'Só são compartilhados o seu nome, quantos dias você treinou e o seu volume total — nunca os seus exercícios, as suas cargas, o seu peso ou as suas anotações.',
+  'Open Settings': 'Abrir Configurações',
+  'Other profiles on this server will see your name, how many days you trained and your total volume. Nothing else is shared, and you can leave at any time.': 'Os outros perfis deste servidor vão ver o seu nome, quantos dias você treinou e o seu volume total. Nada mais é compartilhado, e você pode sair quando quiser.',
+  'Saving…': 'Salvando…',
+  'You left the ranking': 'Você saiu da classificação',
+  'You’re in the ranking': 'Você está na classificação',
+  'You’re not in the ranking': 'Você não está na classificação',
+  'You’re the only profile in the ranking so far. Anyone else with a profile on this server can join it from their own Settings.': 'Por enquanto você é o único perfil na classificação. Qualquer outra pessoa com perfil neste servidor pode entrar pelas próprias Configurações.',
+  'you': 'você'
 }
 
 export default { ...pt, ...PT_BR_OVERRIDES }

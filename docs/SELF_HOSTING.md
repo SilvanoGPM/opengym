@@ -203,6 +203,32 @@ unreadable**, exactly as it already invalidates every session; Settings then say
 the key again, rather than failing quietly. The honest limit is in [SECURITY.md](../SECURITY.md):
 whoever can read `./data` holds both halves, so this protects a leaked backup, not the operator.
 
+## 5c. The ranking (optional, on)
+
+Profiles on this instance can be ranked against each other — how many days each person trained,
+and how much total volume they moved — by week, month, year or all time. It is on by default and
+does nothing until somebody joins:
+
+```bash
+LEADERBOARD=0              # removes the route and the setting entirely
+```
+
+**Nobody appears without joining from their own Settings, and the flag is per person.** Unlike
+the AI assistant this never leaves your instance, which is why it isn't gated off by default —
+the individual opt-in is the real switch. Set `LEADERBOARD=0` if you'd rather the feature not
+exist on your server at all.
+
+What crosses between profiles is only a display name, a count of days trained and a total volume.
+Exercises, loads, body weight, notes and session times never do, in either direction: someone who
+hasn't joined is not listed, and is not shown the list either. Joining and leaving are both
+recorded in the activity log (`AUDIT_LOG`, section 5) as `leaderboard.opt`, so an operator can see
+who is on it and when that changed.
+
+Volume is compared in kilos regardless of each profile's unit setting, since `kg`/`lb` is only a
+label on the numbers people type in (see the note in Settings). A profile that switched units
+mid-history keeps its old numbers, so they are read as the current unit — the same caveat that
+already applies to that profile's own charts.
+
 ## 6. Backups
 
 Everything is in `./data`:

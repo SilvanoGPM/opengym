@@ -1105,3 +1105,32 @@ h4.sec{
 .composer .send .icn{font-size:20px;--icon-stroke:2.2}
 .composer .send:active{transform:scale(.9)}
 .composer .send:disabled{background:var(--surface-3);color:var(--label-3)}
+
+/* ============================ avatar + leaderboard ============================ */
+/* Initials on a coloured disc, in place of a profile photo — see components/Avatar.jsx. */
+.avatar{
+  flex:none;display:inline-flex;align-items:center;justify-content:center;
+  border-radius:50%;background:var(--av-bg);color:#fff;
+  font-weight:600;letter-spacing:-.01em;line-height:1;
+  text-shadow:0 1px 1px rgba(0,0,0,.18);
+}
+.lb-list{display:flex;flex-direction:column}
+.lb-row{display:flex;align-items:center;gap:12px;padding:11px 15px;min-height:56px}
+.lb-row + .lb-row{border-top:var(--hair) solid var(--sep)}
+/* Your own row is tinted rather than outlined, so a pinned copy below the fold reads as the
+   same row and not as a different kind of thing. */
+.lb-row.me{background:var(--acc-tint,color-mix(in srgb,var(--acc) 9%,transparent))}
+.lb-m{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.lb-n{font-size:17px;font-weight:600;letter-spacing:-.012em;display:flex;align-items:center;gap:6px}
+.lb-n em{
+  font-style:normal;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--on-acc);background:var(--acc);border-radius:5px;padding:1px 5px;
+}
+.lb-s{font-size:13px;line-height:1.38;color:var(--label-2)}
+.lb-p{flex:none;font-size:17px;font-weight:600;color:var(--label-2);font-variant-numeric:tabular-nums}
+.lb-row.me .lb-p{color:var(--acc)}
+/* The break between the visible top and your own pinned row. */
+.lb-gap{
+  border-top:var(--hair) solid var(--sep);
+  text-align:center;color:var(--label-3);font-size:12px;letter-spacing:.18em;padding:3px 0 1px;
+}

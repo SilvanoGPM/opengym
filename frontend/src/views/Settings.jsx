@@ -25,6 +25,28 @@ export default function Settings() {
   const fileRef = useRef(null)
   const importRef = useRef(null)
   const wakeOK = wakeLockSupported()
+  const config = useStore(s => s.config)
+  const loadConfig = useStore(s => s.loadConfig)
+  const [lbBusy, setLbBusy] = useState(false)
+  useEffect(() => { loadConfig() }, [])
+
+  // Joining is a decision about what other people can see, so it asks first; leaving is
+  // immediate, because nobody should have to confirm their way out of being listed.
+  const optLeaderboard = async on => {
+    setLbBusy(true)
+    try { const r = await api('/api/leaderboard/opt', { method: 'POST', body: JSON.stringify({ on }) }); setUser({ ...user, lb: r.lb }); toast(on ? t('You’re in the ranking') : t('You left the ranking')) }
+    catch (e) { toast(e.message || t('Could not save that')) }
+    finally { setLbBusy(false) }
+  }
+  const setLb = on => on
+    ? confirmSheet({
+        title: t('Join the ranking?'),
+        message: t('Other profiles on this server will see your name, how many days you trained and your total volume. Nothing else is shared, and you can leave at any time.'),
+        confirmText: t('Join'),
+        onConfirm: () => optLeaderboard(true),
+      })
+    : optLeaderboard(false)
+
 
   const doExport = async () => {
     const json = JSON.stringify(S, null, 2)
@@ -113,6 +135,18 @@ export default function Settings() {
       )}
     </Section>
     {!user && !DEMO && !MOBILE && <p className="sect-f" style={{ marginTop: -18, marginBottom: 22 }}>{t('Guest mode — data lives only in this browser.')}</p>}
+
+    {/* ---------- ranking (server profiles only; the instance can switch it off entirely) ---------- */}
+    {user && !DEMO && config?.leaderboard !== false && (
+      <Section title={t('Ranking')} footer={t('Only your name, how many days you trained and your total volume are shared — never your exercises, your loads, your weight or your notes.')}>
+        <Row icon="trophy" iconTint="var(--orange)" title={t('Join the ranking')} subtitle={t('Compare check-ins and volume with the other profiles on this server.')}>
+          <Switch checked={user.lb === true} disabled={lbBusy} onChange={setLb} />
+        </Row>
+        {user.lb === true && <Row icon="chart" iconTint="var(--acc)" title={t('Ranking')} accessory="chevron" onClick={() => nav('/ranking')} />}
+        <Row icon="person" iconTint="var(--blue)" title={t('Display name')} value={user.name} accessory="chevron"
+          onClick={() => useUI.getState().openSheet(close => <RenameSheet close={close} name={user.name} onSaved={n => setUser({ ...user, name: n })} />)} />
+      </Section>
+    )}
 
     {/* ---------- general ---------- */}
     <Section title={t('General')} footer={t('Note: switching units only changes the label — logged numbers are not converted.')}>
@@ -547,6 +581,30 @@ function EquipmentCard({ S, update }) {
 // Lets the mobile app's "connect to my server" mode (lib/remote.js) authenticate without a
 // WebAuthn ceremony of its own — the code is minted here, from an already signed-in session,
 // and redeemed by the app for a bearer token. See /api/pair/create in api/server.js.
+// Renaming was impossible until now: the display name was typed once, during passkey
+// registration, and never surfaced again. That only became a problem when a screen started
+// putting names side by side.
+function RenameSheet({ close, name, onSaved }) {
+  const [v, setV] = useState(name || '')
+  const [busy, setBusy] = useState(false)
+  const toast = useUI(s => s.toast)
+  const save = async () => {
+    const n = v.trim()
+    if (!n) { toast(t('Enter a name')); return }
+    setBusy(true)
+    try { const r = await api('/api/me/name', { method: 'POST', body: JSON.stringify({ name: n }) }); onSaved(r.name); close(); toast(t('Name updated')) }
+    catch (e) { toast(e.message || t('Could not save the name')) }
+    finally { setBusy(false) }
+  }
+  return <>
+    <h3>{t('Display name')}</h3>
+    <div className="muted small" style={{ marginBottom: 14 }}>{t('This is the name other profiles on this server see in the ranking.')}</div>
+    <TextField value={v} onChange={e => setV(e.target.value)} maxLength={40} placeholder={t('Your name')} />
+    <div style={{ height: 12 }} />
+    <Button onClick={save} disabled={busy}>{busy ? t('Saving…') : t('Save')}</Button>
+  </>
+}
+
 function PairSheet({ close }) {
   const [code, setCode] = useState(null)
   const [err, setErr] = useState(null)

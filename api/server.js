@@ -18,6 +18,7 @@ import { mergeState, replaceState } from './state-merge.js';
 import { SNAPSHOT_DIR, snapshotName, snapshotsFor, snapshotsToPrune } from './snapshots.js';
 import { canAdminWrite } from './admin-write.js';
 import { planUserDelete } from './admin-delete.js';
+import { dailyRoll, isDay, rangeTotals } from './leaderboard.js';
 import {
   PROVIDERS, PROVIDER_IDS, MODELS, DEFAULT_MODEL, MODEL_RE,
   endpointFor, costOf, errorOf, scrubKey, clampTokens
@@ -45,6 +46,11 @@ const ALLOW_GUEST = !/^(0|false|no|off)$/i.test(process.env.ALLOW_GUEST || '');
 // cookie staying good for a year. Overridable because a family instance and one on the open
 // internet don't want the same number. Only affects cookies minted from now on — the expiry is
 // baked into each cookie when it's issued, so lowering this never cuts an existing session short.
+// The leaderboard ranks profiles on this instance against each other. Default ON because
+// nothing happens until somebody opts in individually — unlike AI_ENABLED, which is default off
+// for talking to a third party, this never leaves the instance. LEADERBOARD=0 removes the route
+// and the setting entirely, for an operator who doesn't want the feature to exist at all.
+const LEADERBOARD = !/^(0|false|no|off)$/i.test(process.env.LEADERBOARD || '');
 const SESSION_DAYS = Math.max(1, +(process.env.SESSION_DAYS || 90) || 90);
 const MAX_BODY = 5 * 1024 * 1024;
 // Secure cookies require HTTPS; over plain http://localhost the flag would drop the cookie
@@ -90,6 +96,22 @@ function cachedRow(uid) {
   const row = summarizeRow(readState(uid));
   rowCache.set(uid, { mtimeMs: st.mtimeMs, size: st.size, row });
   return row;
+}
+
+// uid -> { mtimeMs, size, roll }. Same shape and the same mtime+size key as rowCache above, for
+// the same reason: the leaderboard reads every participant's file on one request. What's cached is
+// the whole per-day roll rather than one range's answer, so switching between Week/Month/Year is a
+// scan over a few hundred keys instead of a re-parse — and a cache that can't go stale on the
+// period picker.
+const lbCache = new Map();
+function cachedRoll(uid) {
+  let st = null;
+  try { st = fs.statSync(stateFile(uid)); } catch { lbCache.delete(uid); return dailyRoll(null); }
+  const hit = lbCache.get(uid);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.roll;
+  const roll = dailyRoll(readState(uid));
+  lbCache.set(uid, { mtimeMs: st.mtimeMs, size: st.size, roll });
+  return roll;
 }
 
 /* ---------- snapshots (administrative writes only) ----------
@@ -653,12 +675,12 @@ const routes = {
   'GET /api/health': async (req, res) => json(res, 200, { ok: true, users: db.users.length }),
 
   // Public config the login screen needs before anyone is signed in.
-  'GET /api/config': async (req, res) => json(res, 200, { invite_only: INVITE_ONLY, allow_guest: ALLOW_GUEST, ai_enabled: AI_ENABLED }),
+  'GET /api/config': async (req, res) => json(res, 200, { invite_only: INVITE_ONLY, allow_guest: ALLOW_GUEST, ai_enabled: AI_ENABLED, leaderboard: LEADERBOARD }),
 
   'GET /api/me': async (req, res) => {
     const user = readSession(req);
     if (!user) return json(res, 401, { error: 'not signed in' });
-    json(res, 200, { user: { id: user.id, name: user.name, admin: isAdmin(user) } });
+    json(res, 200, { user: { id: user.id, name: user.name, admin: isAdmin(user), lb: user.lb === true } });
   },
 
   'POST /api/register/options': async (req, res) => {
@@ -799,6 +821,70 @@ const routes = {
 
   // Reads the session purely so the sign-out can be recorded; the cookie is cleared either way.
   // A logout with no valid cookie is a no-op and isn't worth an entry.
+  /* ---------- leaderboard ----------
+     Ranks the profiles on this instance against each other. Three properties hold it together:
+     nobody appears without setting u.lb themselves; only the two numbers below ever cross between
+     profiles (never an exercise, a load, a bodyweight or a note); and the server does no training
+     arithmetic — it filters days and sums a field the workout already carried. */
+
+  // The range comes from the client, which owns weekKey and knows the user's calendar; `w.d` is
+  // already the local date somebody trained on, so no timezone question reaches this process.
+  'GET /api/leaderboard': async (req, res) => {
+    if (!LEADERBOARD) return json(res, 404, { error: 'not found' });
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    const q = new URL(req.url, 'http://x').searchParams;
+    const from = q.get('from'), to = q.get('to');
+    if (!isDay(from) || !isDay(to) || from > to) return json(res, 400, { error: 'bad range' });
+
+    const participants = db.users.filter(u => u.lb === true && !u.disabled);
+    // You see the group only if you're in it. Opting out is opting out of both directions —
+    // otherwise the setting reads as "hide me" while the screen stays a window into everyone else.
+    if (user.lb !== true) return json(res, 200, { me: user.id, participants: participants.length, rows: [] });
+
+    const rows = participants.map(u => ({
+      uid: u.id,
+      name: u.name || '',
+      ...rangeTotals(cachedRoll(u.id), from, to),
+    }));
+    // Unordered on purpose: ranking and tie handling live in one tested place on the client.
+    json(res, 200, { me: user.id, participants: participants.length, rows });
+  },
+
+  // Deliberately its own route rather than a field in the synced state: PUT /api/data is
+  // last-write-wins and doesn't compare _ts (SECURITY.md), so a second device holding an old state
+  // could put somebody back on the board without them asking. A privacy flag can't ride on a merge.
+  'POST /api/leaderboard/opt': async (req, res) => {
+    if (!LEADERBOARD) return json(res, 404, { error: 'not found' });
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    const body = await readBody(req);
+    if (typeof body.on !== 'boolean') return json(res, 400, { error: 'on must be a boolean' });
+    const u = db.users.find(x => x.id === user.id);
+    if (!u) return json(res, 404, { error: 'no such user' });
+    if (body.on) u.lb = true; else delete u.lb;
+    saveDb();
+    audit(req, 'leaderboard.opt', { user: u, msg: body.on ? 'joined' : 'left' });
+    json(res, 200, { lb: u.lb === true });
+  },
+
+  // The display name was set once, at passkey registration, and there was no way back to it. A
+  // list that puts people side by side is the point at which a typo there stops being private.
+  'POST /api/me/name': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    const body = await readBody(req);
+    const name = String(body.name || '').trim().slice(0, 40);   // same cap as registration
+    if (!name) return json(res, 400, { error: 'name required' });
+    const u = db.users.find(x => x.id === user.id);
+    if (!u) return json(res, 404, { error: 'no such user' });
+    const was = u.name;
+    u.name = name;
+    saveDb();
+    audit(req, 'me.rename', { user: u, msg: was + ' -> ' + name });
+    json(res, 200, { name: u.name });
+  },
+
   'POST /api/logout': async (req, res) => {
     const user = readSession(req);
     if (user) audit(req, 'auth.logout', { user });
@@ -1326,6 +1412,7 @@ const routes = {
     db.users = plan.users; db.creds = plan.creds; db.subs = plan.subs; db.invites = plan.invites;
     saveDb();                                            // db.json is an in-memory cache: this is the write
     rowCache.delete(u.id);
+    lbCache.delete(u.id);
     try { fs.unlinkSync(stateFile(u.id)); } catch {}
     for (const f of listSnapshotFiles(u.id)) { try { fs.unlinkSync(path.join(DATA, SNAPSHOT_DIR, f)); } catch {} }
     // The AI key lives outside the state file, so it is the one thing here that would survive a
