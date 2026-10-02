@@ -1700,6 +1700,56 @@ body.chips-dragging *{cursor:inherit}
 .coach-cta-t span{font-size:13px;color:var(--label-2);line-height:1.35}
 .coach-cta-chev{color:var(--acc);font-size:15px;flex:none}
 
+/* ---------------------------------------------------------------- sign-in -- */
+/* The sign-in screen is the only one with no data to show, which is why it used to be an icon
+   and three near-identical buttons in a lot of empty space. Its mark is now the consistency
+   grid — the same cells the Stats heatmap draws (.hm-c, reused rather than restyled), so the
+   first thing you see is the artefact the app is actually about. It fills in from left to
+   right: the shape of a habit forming, not a reading of anyone's numbers. */
+.si{
+  display:flex;flex-direction:column;justify-content:center;
+  min-height:78vh;text-align:center;
+}
+.si-gridwrap{
+  overflow:hidden;margin:0 calc(var(--pad) * -1) 32px;
+  /* Dissolves on all four sides. Without this the grid reads as a cropped chart sitting on the
+     page; with it, it is a texture the screen fades out of. More columns are drawn than can fit
+     so it runs past both edges at any width instead of floating as a block narrower than the
+     buttons under it. */
+  -webkit-mask-image:linear-gradient(90deg,transparent,#000 22%,#000 78%,transparent),linear-gradient(#000,#000 62%,transparent);
+  mask-image:linear-gradient(90deg,transparent,#000 22%,#000 78%,transparent),linear-gradient(#000,#000 62%,transparent);
+  -webkit-mask-composite:source-in;mask-composite:intersect;
+}
+.si-grid{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,11px);gap:3px;justify-content:center}
+/* An untrained day is nearly the background here, rather than the --surface-2 the Stats heatmap
+   uses against a card. On black, that grey turned every gap into a visible tile and the whole
+   thing into one solid rectangle; this way only the trained days carry. */
+/* .l0 explicitly, not a bare .hm-c: that would tie with .hm-c.l1 on specificity and, coming
+   later in this file, flatten every trained day back to the empty colour. */
+/* Mixed from --label rather than hard-coded, so it inverts with the theme: a white 6% wash that
+   reads on black is invisible on the light theme's #f2f2f7. */
+.si-grid .hm-c.l0{background:color-mix(in srgb,var(--label) 8%,transparent)}
+/* Column by column, left to right — the same direction the grid fills. 320ms each against an
+   18ms step, so the whole sweep lands in well under a second and reads as one gesture.
+   The base state is the finished one, so the reduced-motion rule at the top of this file
+   (animation:none) leaves a complete grid rather than an empty one. */
+.si-grid .hm-c{animation:si-cell 320ms var(--ease) both}
+@keyframes si-cell{from{opacity:0;transform:scale(.55)}to{opacity:1;transform:none}}
+
+.si-mark{font-size:34px;line-height:1.06;font-weight:700;letter-spacing:-.028em;margin:0 0 6px}
+.si-lead{font-size:17px;line-height:1.29;letter-spacing:-.012em;color:var(--label-2);margin:0 0 30px}
+.si-actions{display:flex;flex-direction:column;gap:10px}
+
+/* Three things someone deciding whether to trust this needs to know, in the order they ask. */
+.si-facts{
+  display:flex;justify-content:center;flex-wrap:wrap;gap:8px 20px;
+  list-style:none;margin:30px 0 0;padding:18px 0 0;
+  border-top:var(--hair) solid var(--sep);
+  font-size:13px;color:var(--label-3);
+}
+.si-facts li{display:flex;align-items:center;gap:5px}
+.si-facts .icn{font-size:14px;color:var(--label-2)}
+
 /* ----------------------------------------------------------- RTL (Arabic) -- */
 /* Directional icons flip: back chevrons point right, trailing chevrons point left. */
 [dir="rtl"] [data-icon="chevronLeft"],
@@ -1720,6 +1770,6 @@ body.chips-dragging *{cursor:inherit}
 [dir="rtl"] .sw.on:active .knob{transform:translateX(-16px)}
 /* Chronological grids keep their left-to-right order: heatmap weeks and calendar
    weekdays would otherwise mirror. */
-[dir="rtl"] .hm-wrap,[dir="rtl"] .cal-grid{direction:ltr}
+[dir="rtl"] .hm-wrap,[dir="rtl"] .cal-grid,[dir="rtl"] .si-grid{direction:ltr}
 /* Tight tracking is tuned for Latin; Arabic is a connected script and gets none. */
 [dir="rtl"] *{letter-spacing:0}

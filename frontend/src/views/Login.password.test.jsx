@@ -55,7 +55,7 @@ describe('Login with password sign-in', () => {
   it('an instance without it looks exactly as before', () => {
     const page = mount(<Login />)
     expect(buttons(page)).not.toContain('Sign in with password')
-    expect(page.textContent).toContain('Passkeys use your fingerprint — no passwords.')
+    expect(page.textContent).toContain('No passwords')   // the sign-in screen's facts row
     mocks.webauthn = false
     const noPasskeys = mount(<Login />)
     expect(noPasskeys.textContent).toContain("This browser doesn't support passkeys — you can still use openGym locally on this device.")
@@ -66,7 +66,7 @@ describe('Login with password sign-in', () => {
     mocks.config = { password_login: true, allow_guest: true }
     const page = mount(<Login />)
     expect(buttons(page).slice(0, 3)).toEqual(['Sign in with passkey', 'Sign in with password', 'Create new profile'])
-    expect(page.textContent).toContain('Passkeys use your fingerprint. A password works too, where passkeys do not.')
+    expect(page.textContent).not.toContain('No passwords')
     act(() => button(page, 'Sign in with password').click())
     const sheet = mount(mocks.sheets[0](() => {}))
     expect(sheet.querySelector('h3').textContent).toBe('Sign in with password')

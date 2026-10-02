@@ -624,17 +624,29 @@ export const useStore = create((set, get) => {
     fpOf = null
   }
 
+  // How this device is set up to look and read. Not account data — signing out clears what you
+  // logged, but it should not put the app back into another language or theme, because those were
+  // choices about this browser rather than things stored in the profile. The sign-in screen is
+  // the one screen that only ever renders in this state, so resetting them was most visible
+  // exactly where the app makes its first impression.
+  const DEVICE_PREFS = ['lang', 'theme', 'accent']
+
   // Everything a sign-out leaves behind on this device, whichever way it was triggered. The owner
   // goes last, after the wiped copy is written — the storage listener above relies on the order.
   const clearLocalSession = () => {
-    const hadMedia = referencedHashes(get().S).size > 0
+    const prev = get().S
+    const hadMedia = referencedHashes(prev).size > 0
     get().setUser(null)
     localStorage.removeItem('gym_guest')
     forgetSync()
     releaseAdopt()   // the copy it was about is gone
     localStorage.removeItem(KEY)
-    // Signed out, this device is nobody's: the sign-in screen is in the instance's language.
-    persist(freshState(), false)
+    // Signed out, this device is nobody's — but it keeps the language someone picked on it. One
+    // that was never picked (langAuto) still follows the instance's DEFAULT_LANG or the browser.
+    const fresh = freshState()
+    DEVICE_PREFS.forEach(k => { if (prev[k] != null) fresh[k] = prev[k] })
+    fresh.langAuto = prev.langAuto === true
+    persist(fresh, false)
     localStorage.removeItem('gym_owner_name')
     localStorage.removeItem('gym_owner')
     setSync({ offline: false, auth: false, lastError: null, pending: false, lastSynced: 0 })
