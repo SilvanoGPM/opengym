@@ -31,6 +31,10 @@ import {
 } from './passkeys-store.js';
 import { createDeviceLink, findDeviceLink, burnDeviceLink, dropDeviceLinks } from './device-link.js';
 import { createMediaStore, mediaLimits, mediaConfig, MediaError, HASH_RE } from './media.js';
+import { summarize } from './user-summary.js';
+import { mergeState, replaceState, stampRemoval } from './state-merge.js';
+import { SNAPSHOT_DIR, snapshotName, snapshotsFor, snapshotsToPrune } from './snapshots.js';
+import { canAdminWrite } from './admin-write.js';
 
 const PORT = +(process.env.PORT || 3000);
 const DATA = process.env.DATA_DIR || '/data';
@@ -389,6 +393,63 @@ function readStateCached(uid) {
   stateCache.set(uid, { mtimeMs: st.mtimeMs, size: st.size, hitAt: now, S });
   while (stateCache.size > STATE_CACHE_MAX) stateCache.delete(stateCache.keys().next().value);
   return S;
+}
+
+/* ---------- administrative writes ----------
+   The one other writer of a state file besides PUT /api/data, and it keeps the same books: the
+   revision moves (so every device of that profile pulls, or gets the 409 and merges), the stat
+   cache forgets the file, and the media store re-reads what the document references. Callers stamp
+   what they removed (stampRemoval) before they get here, so a device that still owes a change
+   cannot merge the removed entries back. Synchronous on purpose, like the PUT route: nothing is
+   awaited between reading the current revision and writing the next one. */
+function writeStateAsAdmin(uid, next) {
+  next._rev = (readState(uid)?._rev || 0) + 1;
+  delete next.active;
+  atomicWrite(stateFile(uid), JSON.stringify(next));
+  stateCache.delete(uid);
+  if (MEDIA_ON) {
+    try { MEDIA.noteState(uid, next); } catch (e) { console.error('media noteState', e); }
+  }
+  return next;
+}
+
+/* ---------- snapshots (administrative writes only) ----------
+   Every admin write copies the current state aside first, which is what makes writing into
+   somebody else's account reversible. A normal PUT /api/data never lands here — this is not
+   version history, it is an undo for operator actions. */
+const SNAPSHOT_KEEP = Math.max(1, +(process.env.ADMIN_SNAPSHOT_KEEP || 10) || 10);
+const snapDir = () => path.join(DATA, SNAPSHOT_DIR);
+function listSnapshots(uid) {
+  try {
+    return snapshotsFor(fs.readdirSync(snapDir()), uid).map(x => {
+      let bytes = 0;
+      try { bytes = fs.statSync(path.join(snapDir(), x.file)).size; } catch { /* gone meanwhile */ }
+      return { ts: x.ts, bytes };
+    });
+  } catch { return []; }
+}
+function takeSnapshot(uid, state) {
+  // Two writes inside one millisecond would otherwise share a name, and the second would replace
+  // the only copy of what the first one changed.
+  let ts = Date.now();
+  while (fs.existsSync(path.join(snapDir(), snapshotName(uid, ts)))) ts++;
+  fs.mkdirSync(snapDir(), { recursive: true, mode: 0o700 });
+  atomicWrite(path.join(snapDir(), snapshotName(uid, ts)), JSON.stringify(state || {}), 0o600);
+  return ts;
+}
+function pruneSnapshots(uid) {
+  try {
+    for (const f of snapshotsToPrune(fs.readdirSync(snapDir()), uid, SNAPSHOT_KEEP)) {
+      try { fs.unlinkSync(path.join(snapDir(), f)); } catch { /* gone meanwhile */ }
+    }
+  } catch { /* no snapshot directory yet */ }
+}
+function removeSnapshots(uid) {
+  try {
+    for (const { file } of snapshotsFor(fs.readdirSync(snapDir()), uid)) {
+      try { fs.unlinkSync(path.join(snapDir(), file)); } catch { /* gone meanwhile */ }
+    }
+  } catch { /* no snapshot directory yet */ }
 }
 setInterval(() => {
   for (const user of db.users) {
@@ -2204,10 +2265,16 @@ const routes = {
     json(res, 200, {
       user: {
         id: u.id, name: u.name, created: u.created || null, disabled: !!u.disabled, admin: isAdmin(u), invitedBy: u.invitedBy || null,
+        // An admin by ADMIN_UIDS cannot be demoted from the dashboard (isAdmin ORs the two
+        // sources), and the screen says so instead of offering a switch that would not hold.
+        envAdmin: ADMIN_UIDS.includes(u.id),
         // Only on an instance with password sign-in: whether they have one, and until when an
         // unused reset code is good.
         ...(PASSWORD_LOGIN ? { password: hasPassword(u), email: u.email || null, resetUntil: u.pwReset?.exp > Date.now() ? u.pwReset.exp : null } : {})
       },
+      live: !!livePresence(u.id),
+      // Counts, the span trained and the month-by-month series the user screen charts.
+      ...summarize({ workouts: records(S.workouts), bodyweight: records(S.bodyweight), routines: records(S.routines), customEx: records(S.customEx) }),
       unit: S.unit || 'kg',
       lastSync: lastSyncOf(u, S),
       routines: records(S.routines).map(r => ({ id: r.id, name: r.name, emoji: r.emoji, count: records(r.ex).length })),
@@ -2246,7 +2313,10 @@ const routes = {
     if (!u) return json(res, 404, { error: 'no such user' });
     if (u.id === admin.id) return json(res, 400, { error: 'you cannot delete your own account' });
     if (isAdmin(u) && db.users.filter(isAdmin).length <= 1) return json(res, 400, { error: 'cannot delete the last admin' });
+    // Their app would go on pushing a session into an account that no longer exists.
+    if (livePresence(u.id)) return json(res, 409, { code: 'live', error: `${u.name} is training right now` });
     const name = u.name;
+    cancelRestTimer(u.id);
     db.users = db.users.filter(x => x.id !== u.id);
     db.creds = (db.creds || []).filter(c => c.userId !== u.id);
     db.subs = (db.subs || []).filter(x => x.userId !== u.id);
@@ -2257,10 +2327,171 @@ const routes = {
     try { coachConfig.clearProfileAuth(u.id); } catch { /* nothing stored */ }
     // Their photos and videos — the one place a profile's folder under uploads/ is removed.
     try { MEDIA.removeUser(u.id); } catch (e) { console.error('media: could not remove uploads of', u.id, e.message); }
+    // And every undo point of the admin panel: each one is a full copy of that history.
+    removeSnapshots(u.id);
     saveDb();
     // Logged with the name, because the id is about to mean nothing to anyone reading this back.
     audit(req, 'admin.user.delete', { user: admin, msg: name });
     json(res, 200, { ok: true, id: u.id });
+  },
+
+  // Who is training right now, and nothing else. Split from /api/admin/users because presence is
+  // the only part the dashboard wants on a 15 s timer, and this reads a Map in memory instead of
+  // parsing every user's state file off disk 240 times an hour.
+  'GET /api/admin/presence': async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const live = [];
+    for (const u of db.users) {
+      const p = livePresence(u.id);
+      // Named field by field rather than spread: the presence record's own `name` is the
+      // routine being trained, which would otherwise overwrite the person's name.
+      if (p) live.push({
+        id: u.id, user: u.name, workout: p.name,
+        exIdx: p.exIdx, exTotal: p.exTotal, setsDone: p.setsDone, setsTotal: p.setsTotal,
+        startedAt: p.startedAt, updatedAt: p.updatedAt
+      });
+    }
+    json(res, 200, { live, now: Date.now() });
+  },
+
+  // The state file as stored: ascending, unmodified — the backup download, and the base a
+  // restore is previewed against. Unlike GET /api/admin/user it keeps each workout's media list:
+  // those are hashes, not the files (which stay the owner's), and a backup without them would
+  // detach every photo the moment it was restored.
+  'GET /api/admin/user/state': async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const id = new URL(req.url, 'http://x').searchParams.get('id');
+    const u = db.users.find(x => x.id === id);
+    if (!u) return json(res, 404, { error: 'no such user' });
+    const S = readState(u.id);
+    json(res, 200, { id: u.id, name: u.name, state: S, ts: S ? S._ts || null : null });
+  },
+
+  /* Writing into somebody else's account is only defensible with guards that hold, so they land
+     together: validate, snapshot, refuse under a live session, and audit — in the order
+     canAdminWrite (api/admin-write.js) enforces. Every write then moves the revision and stamps
+     what it removed (writeStateAsAdmin, stampRemoval), so the user's devices pull it, or merge
+     without bringing the removed entries back. */
+
+  // Restore or merge a state file. Also the route the CSV import posts to: parsing needs the
+  // exercise catalogue, which only the frontend has, so the client parses and the server applies
+  // the merge rule.
+  'POST /api/admin/user/state': async (req, res) => {
+    const admin = requireAdmin(req, res); if (!admin) return;
+    const body = await readBody(req);
+    const u = db.users.find(x => x.id === body.id);   // resolved BEFORE touching any path
+    const gate = canAdminWrite({ target: u, mode: body.mode, state: body.state, confirm: body.confirm, live: !!(u && livePresence(u.id)) });
+    if (!gate.ok) return json(res, gate.status, { error: gate.error, code: gate.code });
+
+    const before = readState(u.id) || {};
+    const snap = takeSnapshot(u.id, before);
+    const r = body.mode === 'replace' ? replaceState(body.state) : mergeState(before, body.state);
+    // A merge only adds, and the union a device merges with keeps what it added. A replace takes
+    // entries away, and has to say which.
+    if (body.mode === 'replace') stampRemoval(before, r.state);
+    writeStateAsAdmin(u.id, r.state);
+    pruneSnapshots(u.id);
+    audit(req, body.mode === 'replace' ? 'admin.user.state.replace' : 'admin.user.state.merge',
+      { user: admin, target: u, msg: `+${r.added} workouts, ${r.skipped} skipped` });
+    json(res, 200, { ok: true, added: r.added, skipped: r.skipped, addedBodyweight: r.addedBodyweight, snapshot: snap, workouts: r.state.workouts?.length || 0 });
+  },
+
+  'POST /api/admin/user/workout/delete': async (req, res) => {
+    const admin = requireAdmin(req, res); if (!admin) return;
+    const body = await readBody(req);
+    const u = db.users.find(x => x.id === body.id);
+    const gate = canAdminWrite({ target: u, live: !!(u && livePresence(u.id)) });
+    if (!gate.ok) return json(res, gate.status, { error: gate.error, code: gate.code });
+
+    const S = readState(u.id) || {};
+    const gone = records(S.workouts).find(w => w.id === body.workoutId);
+    if (!gone) return json(res, 404, { error: 'no such workout' });
+    const snap = takeSnapshot(u.id, S);
+    // What deleting it from History does on the device, exWeights left alone included: an admin
+    // deletion that behaved differently from the user's own would be its own kind of surprise.
+    const next = { ...S, workouts: records(S.workouts).filter(w => w.id !== body.workoutId), _ts: Date.now() };
+    stampRemoval(S, next);
+    writeStateAsAdmin(u.id, next);
+    pruneSnapshots(u.id);
+    audit(req, 'admin.user.workout.delete', { user: admin, target: u, msg: gone.d });
+    json(res, 200, { ok: true, snapshot: snap, workouts: next.workouts.length });
+  },
+
+  'GET /api/admin/user/snapshots': async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const id = new URL(req.url, 'http://x').searchParams.get('id');
+    const u = db.users.find(x => x.id === id);
+    if (!u) return json(res, 404, { error: 'no such user' });
+    json(res, 200, { snapshots: listSnapshots(u.id), keep: SNAPSHOT_KEEP });
+  },
+
+  // Rolling back is itself a replace, so it snapshots first — undoing an undo works.
+  'POST /api/admin/user/snapshots/restore': async (req, res) => {
+    const admin = requireAdmin(req, res); if (!admin) return;
+    const body = await readBody(req);
+    const u = db.users.find(x => x.id === body.id);
+    const gate = canAdminWrite({ target: u, live: !!(u && livePresence(u.id)), requireConfirm: true, confirm: body.confirm });
+    if (!gate.ok) return json(res, gate.status, { error: gate.error, code: gate.code });
+
+    // Resolved through snapshotName from the user just looked up, never from a caller-supplied
+    // path, and only a timestamp that is one of theirs.
+    if (!listSnapshots(u.id).some(x => x.ts === +body.ts)) return json(res, 404, { error: 'no such snapshot' });
+    let restored = null;
+    try { restored = JSON.parse(fs.readFileSync(path.join(snapDir(), snapshotName(u.id, +body.ts)), 'utf8')); }
+    catch { return json(res, 404, { error: 'no such snapshot' }); }
+    const before = readState(u.id) || {};
+    const snap = takeSnapshot(u.id, before);
+    const r = replaceState(restored);
+    stampRemoval(before, r.state);
+    writeStateAsAdmin(u.id, r.state);
+    pruneSnapshots(u.id);
+    audit(req, 'admin.user.snapshot.restore', { user: admin, target: u, msg: new Date(+body.ts).toISOString() });
+    json(res, 200, { ok: true, snapshot: snap, workouts: r.state.workouts?.length || 0 });
+  },
+
+  // Snapshots accumulate: ten per user by default, and an operator clearing up should not have
+  // to reach for the filesystem. No live check — deleting an undo point changes nobody's data.
+  'POST /api/admin/user/snapshots/delete': async (req, res) => {
+    const admin = requireAdmin(req, res); if (!admin) return;
+    const body = await readBody(req);
+    const u = db.users.find(x => x.id === body.id);
+    if (!u) return json(res, 404, { error: 'no such user' });
+    const all = listSnapshots(u.id);
+    const targets = body.ts === 'all' ? all.map(x => x.ts) : [+body.ts];
+    if (body.ts !== 'all' && !all.some(x => x.ts === +body.ts)) return json(res, 404, { error: 'no such snapshot' });
+    let removed = 0;
+    for (const ts of targets) {
+      try { fs.unlinkSync(path.join(snapDir(), snapshotName(u.id, ts))); removed++; } catch { /* gone meanwhile */ }
+    }
+    audit(req, 'admin.user.snapshot.delete', { user: admin, target: u, msg: body.ts === 'all' ? `all (${removed})` : new Date(+body.ts).toISOString() });
+    json(res, 200, { ok: true, removed, snapshots: listSnapshots(u.id) });
+  },
+
+  // The flag, not ADMIN_UIDS — which this cannot touch, because isAdmin ORs the two sources.
+  'POST /api/admin/user/admin': async (req, res) => {
+    const admin = requireAdmin(req, res); if (!admin) return;
+    const body = await readBody(req);
+    const u = db.users.find(x => x.id === body.id);
+    if (!u) return json(res, 404, { error: 'no such user' });
+    const want = !!body.admin;
+    if (!want) {
+      if (u.id === admin.id) return json(res, 400, { error: 'you cannot demote yourself', code: 'self' });
+      if (ADMIN_UIDS.includes(u.id)) {
+        return json(res, 400, { code: 'env-admin', error: 'this admin comes from the ADMIN_UIDS environment variable — remove them there and restart the server' });
+      }
+      if (!db.users.some(x => x.id !== u.id && isAdmin(x))) {
+        return json(res, 400, { code: 'last-admin', error: 'that would leave the instance with no admin' });
+      }
+      delete u.admin;
+    } else {
+      // An admin cannot be disabled, so promoting a disabled account would leave it locked out
+      // with no switch to let it back in.
+      if (u.disabled) return json(res, 400, { code: 'disabled', error: 'enable the account before making it an admin' });
+      u.admin = true;
+    }
+    saveDb();
+    audit(req, want ? 'admin.user.promote' : 'admin.user.demote', { user: admin, target: u });
+    json(res, 200, { ok: true, id: u.id, admin: isAdmin(u) });
   },
 
   'GET /api/admin/invites': async (req, res) => {
@@ -2325,9 +2556,17 @@ const routes = {
     });
   },
 
+  // ./data/audit.log already is the export for anyone with a shell; this is the same JSONL for
+  // whoever only has the dashboard. Retention applies, as on every read.
+  'GET /api/admin/audit/export': async (req, res) => {
+    const admin = requireAdmin(req, res); if (!admin) return;
+    const events = auditKeep(auditLines());
+    audit(req, 'admin.audit.export', { user: admin, msg: String(events.length) });
+    json(res, 200, { events });
+  },
+
   // Deleting the log is itself logged, and auditSeq is not reset — so a clear always leaves a
-  // visible gap in the ids and can't be used to quietly erase a trace. There is no export route:
-  // ./data/audit.log already is the export, in a format jq reads directly.
+  // visible gap in the ids and can't be used to quietly erase a trace.
   'POST /api/admin/audit/clear': async (req, res) => {
     const admin = requireAdmin(req, res); if (!admin) return;
     try { fs.unlinkSync(auditFile); } catch { /* nothing logged yet */ }

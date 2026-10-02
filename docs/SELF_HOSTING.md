@@ -478,6 +478,19 @@ on, `audit.log` with everyone's sign-in times. Worth knowing before you ship the
 backup service you don't run. Restore by unpacking it back into the project folder. (Individual
 users can also export their own data as JSON from Settings.)
 
+**Restoring `db.json` needs a restart.** It is read once when the API starts and rewritten from
+memory on every change, so unpacking an archive under a running server is undone by the next
+sign-in. Stop the container, restore, start it again.
+
+**Per-user backups from the admin dashboard.** An admin can download any single user's data as
+JSON and restore it — useful for "I lost my routines" without going near the whole archive. That
+file is training data and preferences only: no passkeys, no push subscriptions, no photos or
+videos, so it cannot be used to get into the account. It also restores from the user's own
+Settings, interchangeably with the backup a user exports themselves. Restoring merges by default
+(days already in the account win) and takes a snapshot into `./data/snapshots` first —
+`ADMIN_SNAPSHOT_KEEP` sets how many are kept per user, default 10 — and the change reaches the
+user's devices at their next sync. See SECURITY.md for what an admin can and cannot do.
+
 The photos and videos of custom exercises are in `data/uploads/`, and they are most of what makes
 the archive large. To leave them out:
 

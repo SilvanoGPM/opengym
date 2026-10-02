@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
-// The admin drill-down (QA C16): a profile whose stored workouts hold a null or otherwise
-// shapeless entry must still open, because the sheet host sits outside the route's
-// ErrorBoundary — a throw here blanked the whole app and left the account un-disableable.
+// The admin dashboard's user list. A user opens on a screen of their own (AdminUser.jsx, where
+// the QA C16 case — a profile whose stored workouts hold shapeless entries — is pinned too).
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -9,7 +8,7 @@ import Admin from './Admin.jsx'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-const mocks = vi.hoisted(() => ({ answers: {}, sheets: [] }))
+const mocks = vi.hoisted(() => ({ answers: {}, sheets: [], went: [] }))
 vi.mock('../lib/api.js', () => ({
   api: path => {
     const key = path.split('?')[0]
@@ -28,7 +27,7 @@ vi.mock('../store/useUI.js', () => {
   useUI.getState = snap
   return { useUI }
 })
-vi.mock('react-router-dom', () => ({ useNavigate: () => () => {} }))
+vi.mock('react-router-dom', () => ({ useNavigate: () => to => mocks.went.push(to) }))
 vi.mock('../sheets.jsx', () => ({ confirmSheet: vi.fn() }))
 vi.mock('./AdminCoach.jsx', () => ({ default: () => null }))
 
@@ -48,6 +47,7 @@ const good = { id: 'w1', name: 'Push day', d: '2026-09-10', start: 1000, end: 61
 beforeEach(() => {
   document.body.innerHTML = ''
   mocks.sheets.length = 0
+  mocks.went.length = 0
   mocks.answers = {
     '/api/admin/users': { users: [{ id: 'u1', name: 'Mallory', workouts: 2, lastSync: null, disabled: false }], invite_only: false },
     '/api/admin/invites': { invites: [] },
@@ -63,23 +63,23 @@ beforeEach(() => {
 })
 afterEach(() => { act(() => { mounted.splice(0).forEach(root => root.unmount()) }) })
 
-describe('Admin user drill-down', () => {
-  it('opens a profile with malformed workout entries and still offers "Disable account"', async () => {
+describe('Admin user list', () => {
+  it('opens a user on their own screen', async () => {
     const page = render(<Admin />)
     await settle()
     const row = [...page.querySelectorAll('.item')].find(el => el.textContent.includes('Mallory'))
     expect(row).toBeTruthy()
     act(() => row.click())
-    expect(mocks.sheets.length).toBe(1)
-    const sheet = render(mocks.sheets[0](() => {}))
+    expect(mocks.went).toEqual(['/admin/u/u1'])
+    expect(mocks.sheets.length).toBe(0)
+  })
+
+  it('takes "training now" from the presence poll', async () => {
+    mocks.answers['/api/admin/presence'] = { live: [{ id: 'u1', user: 'Mallory', workout: 'Leg day', exIdx: 2, exTotal: 5, setsDone: 4, setsTotal: 15, startedAt: Date.now() - 600000 }] }
+    const page = render(<Admin />)
     await settle()
-    const buttons = [...sheet.querySelectorAll('button')].map(b => b.textContent)
-    expect(buttons).toContain('Disable account')
-    // The one real session is listed; the two shapeless entries are skipped, not drawn as blanks.
-    const rows = [...sheet.querySelectorAll('.list > div')]
-    expect(rows.length).toBe(1)
-    expect(rows[0].textContent).toContain('Push day')
-    expect(rows[0].textContent).toContain('1 sets')
+    expect(page.textContent).toContain('training now · Leg day')
+    expect(page.textContent).toContain('exercise 2 of 5')
   })
 })
 

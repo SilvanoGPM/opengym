@@ -2128,9 +2128,10 @@ paths:
         Removes the account for good: the user record, their passkeys, their push
         subscriptions, their live presence, their training history file, their uploaded
         photos and videos (`DATA_DIR/uploads/<uid>/`) and any Coach credential stored for
-        them. Not reversible — `/api/admin/user/disable` is the
-        reversible one. An admin cannot delete their own account, and the last admin
-        cannot be deleted. Audited by name, since the id stops meaning anything.
+        them, and every snapshot of their data the admin panel kept. Not reversible —
+        `/api/admin/user/disable` is the reversible one. An admin cannot delete their own
+        account, the last admin cannot be deleted, and nobody can be while they are training
+        (409). Audited by name, since the id stops meaning anything.
       requestBody:
         required: true
         content:
@@ -2164,6 +2165,332 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
               example: { error: "no such user" }
+
+  /api/admin/presence:
+    get:
+      tags: [admin]
+      operationId: adminPresence
+      summary: 'Admin: who is training right now'
+      description: >-
+        The live sessions only, read from memory — what the dashboard polls every 15 s
+        instead of the full user list, which reads every state file.
+      responses:
+        '200':
+          description: One row per running session.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  live:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, description: The user id. }
+                        user: { type: string, description: The user's name. }
+                        workout: { type: string, description: The routine being trained. }
+                        exIdx: { type: integer }
+                        exTotal: { type: integer }
+                        setsDone: { type: integer }
+                        setsTotal: { type: integer }
+                        startedAt: { type: integer, description: Epoch ms. }
+                        updatedAt: { type: integer, description: Epoch ms. }
+                  now: { type: integer, description: Server time, epoch ms. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/admin/user/state:
+    get:
+      tags: [admin]
+      operationId: adminUserState
+      summary: "Admin: a user's state file as stored"
+      description: >-
+        Ascending and unmodified, including each workout's media references (hashes, not the
+        files) — the source of the per-user backup download. `state` is null for a profile
+        that never synced.
+      parameters:
+        - { name: id, in: query, required: true, schema: { type: string }, description: The user id. }
+      responses:
+        '200':
+          description: The document.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+                  state: { oneOf: [{ type: object }, { type: 'null' }] }
+                  ts: { oneOf: [{ type: integer }, { type: 'null' }], description: The document's `_ts`. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: No user with that id.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    post:
+      tags: [admin]
+      operationId: adminUserStateWrite
+      summary: "Admin: merge a backup into a user's data, or replace it"
+      description: |
+        `merge` adds the days the user does not have (a day they already have wins) and the
+        weigh-ins of new days; it never removes anything. `replace` takes the file wholesale
+        and needs `confirm: true`. Either way a snapshot of the current document is taken
+        first (`ADMIN_SNAPSHOT_KEEP`, 10 per user by default), the revision moves so the
+        user's devices pull the change, and a replace stamps what it removed (`resetAt`,
+        `resetIds`) so a device that still owes a change of its own cannot merge it back.
+        Refused with 409 while the user is training. Audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, mode, state]
+              properties:
+                id: { type: string, description: The user id. }
+                mode: { type: string, enum: [merge, replace] }
+                state: { type: object, description: 'A state document: workouts need an id and a YYYY-MM-DD day, weigh-ins a day and a weight.' }
+                confirm: { type: boolean, description: Required for `replace`. }
+      responses:
+        '200':
+          description: Written.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, const: true }
+                  added: { type: integer }
+                  skipped: { type: integer, description: Workouts on days the user already had. }
+                  addedBodyweight: { type: integer }
+                  snapshot: { type: integer, description: The snapshot taken first (epoch ms). }
+                  workouts: { type: integer, description: Workouts in the document now. }
+        '400':
+          description: '`bad-mode`, `invalid-state` (with the first problems found) or `confirm-required`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: No user with that id.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: '`live` — the user is training right now.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/admin/user/workout/delete:
+    post:
+      tags: [admin]
+      operationId: adminUserWorkoutDelete
+      summary: "Admin: delete one workout from a user's history"
+      description: >-
+        Snapshot first, then the workout goes, stamped as removed so the user's devices drop
+        it too. Refused with 409 while the user is training. Audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, workoutId]
+              properties:
+                id: { type: string, description: The user id. }
+                workoutId: { type: string }
+      responses:
+        '200':
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, const: true }
+                  snapshot: { type: integer }
+                  workouts: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: No such user, or no such workout.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: '`live` — the user is training right now.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/admin/user/snapshots:
+    get:
+      tags: [admin]
+      operationId: adminUserSnapshots
+      summary: "Admin: the undo points of a user's data"
+      description: >-
+        One per administrative write, newest first; the newest `keep` are kept
+        (`ADMIN_SNAPSHOT_KEEP`). Stored under `DATA_DIR/snapshots/`.
+      parameters:
+        - { name: id, in: query, required: true, schema: { type: string }, description: The user id. }
+      responses:
+        '200':
+          description: The list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  snapshots:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ts: { type: integer, description: Taken at, epoch ms — also its id. }
+                        bytes: { type: integer }
+                  keep: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: No user with that id.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/admin/user/snapshots/restore:
+    post:
+      tags: [admin]
+      operationId: adminUserSnapshotRestore
+      summary: "Admin: roll a user's data back to a snapshot"
+      description: >-
+        A replace like any other: it snapshots the current document first (so a rollback can
+        be rolled back), moves the revision and stamps what it removed. Needs `confirm: true`;
+        refused with 409 while the user is training. Audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, ts, confirm]
+              properties:
+                id: { type: string, description: The user id. }
+                ts: { type: integer, description: The snapshot. }
+                confirm: { type: boolean, const: true }
+      responses:
+        '200':
+          description: Rolled back.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, const: true }
+                  snapshot: { type: integer, description: The snapshot taken of the document it replaced. }
+                  workouts: { type: integer }
+        '400':
+          description: '`confirm-required`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: No such user, or no such snapshot of theirs.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: '`live` — the user is training right now.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/admin/user/snapshots/delete:
+    post:
+      tags: [admin]
+      operationId: adminUserSnapshotDelete
+      summary: "Admin: delete one of a user's snapshots, or all of them"
+      description: Changes nobody's data, so there is no live check. Audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, ts]
+              properties:
+                id: { type: string, description: The user id. }
+                ts:
+                  oneOf:
+                    - { type: integer, description: One snapshot. }
+                    - { type: string, const: all }
+      responses:
+        '200':
+          description: Deleted; the list as it is now.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, const: true }
+                  removed: { type: integer }
+                  snapshots: { type: array, items: { type: object } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: No such user, or no such snapshot of theirs.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/admin/user/admin:
+    post:
+      tags: [admin]
+      operationId: adminUserAdminFlag
+      summary: 'Admin: make a user an admin, or remove it'
+      description: >-
+        Sets or clears the `admin` flag on the user record. An admin from `ADMIN_UIDS` cannot
+        be demoted here (`env-admin`), nor can you demote yourself (`self`) or the last admin
+        (`last-admin`); a disabled account cannot be promoted (`disabled`). Audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, admin]
+              properties:
+                id: { type: string, description: The user id. }
+                admin: { type: boolean }
+      responses:
+        '200':
+          description: Changed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, const: true }
+                  id: { type: string }
+                  admin: { type: boolean }
+        '400':
+          description: '`self`, `env-admin`, `last-admin` or `disabled`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: No user with that id.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /api/admin/invites:
     get:
@@ -2312,6 +2639,26 @@ paths:
                       max: { type: integer, description: 'Event cap (0 = none).' }
                       days: { type: integer, description: 'Age cap in days (0 = none).' }
                   now: { type: number, description: Server time (ms). }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/admin/audit/export:
+    get:
+      tags: [admin]
+      operationId: adminAuditExport
+      summary: 'Admin: the whole activity log'
+      description: >-
+        Every retained event, oldest first — the dashboard saves it as JSONL, the format of
+        `DATA_DIR/audit.log` itself. The export is logged.
+      responses:
+        '200':
+          description: The events.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events: { type: array, items: { type: object } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -3451,6 +3798,7 @@ components:
             disabled: { type: boolean }
             admin: { type: boolean }
             invitedBy: { oneOf: [{ type: string }, { type: 'null' }] }
+            envAdmin: { type: boolean, description: An admin by `ADMIN_UIDS`, which the dashboard cannot demote. }
             password: { type: boolean, description: PASSWORD_LOGIN instances only. }
             email:
               oneOf: [{ type: string }, { type: 'null' }]
@@ -3476,6 +3824,27 @@ components:
           type: array
           description: Full history, newest first.
           items: { $ref: '#/components/schemas/Workout' }
+        live: { type: boolean, description: Training right now. }
+        counts:
+          type: object
+          properties:
+            workouts: { type: integer }
+            bodyweight: { type: integer }
+            routines: { type: integer }
+            customEx: { type: integer }
+        first: { oneOf: [{ type: string }, { type: 'null' }], description: Day of the first workout. }
+        last: { oneOf: [{ type: string }, { type: 'null' }], description: Day of the last workout. }
+        monthly:
+          type: array
+          description: Ascending, months with workouts only.
+          items:
+            type: object
+            properties:
+              m: { type: string, description: YYYY-MM }
+              workouts: { type: integer }
+              vol: { type: number, description: Sum of the workouts' stored volume. }
+              ms: { type: number, description: Time trained. }
+        volUnknown: { type: integer, description: Workouts with no stored volume (imported history), left out of `vol`. }
 
     Invite:
       type: object

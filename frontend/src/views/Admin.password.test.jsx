@@ -3,10 +3,11 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Admin from './Admin.jsx'
+import AdminUser from './AdminUser.jsx'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-/* The admin's half of password sign-in (#118): "Reset password" in a user's drill-down, which
+/* The admin's half of password sign-in (#118): "Reset password" on a user's screen, which
    asks first and then shows the one-time code exactly once, on a sheet that a stray tap cannot
    close. Only an instance with password sign-in sends `password` on the user, and only then is
    any of this there. */
@@ -30,7 +31,7 @@ vi.mock('../store/useUI.js', () => {
   useUI.getState = snap
   return { useUI }
 })
-vi.mock('react-router-dom', () => ({ useNavigate: () => () => {} }))
+vi.mock('react-router-dom', () => ({ useNavigate: () => () => {}, useParams: () => ({ id: 'u1' }) }))
 vi.mock('../sheets.jsx', () => ({ confirmSheet: (...a) => mocks.confirm(...a) }))
 vi.mock('./AdminCoach.jsx', () => ({ default: () => null }))
 
@@ -50,11 +51,9 @@ const detail = extra => ({
   user: { id: 'u1', name: 'Mallory', created: '2026-09-01T00:00:00Z', disabled: false, admin: false, ...extra },
   unit: 'kg', lastSync: null, routines: [], bodyweight: [], workouts: []
 })
+// Mallory's screen (AdminUser.jsx), where the list opens her.
 async function openMallory() {
-  const page = render(<Admin />)
-  await settle()
-  act(() => [...page.querySelectorAll('.item')].find(el => el.textContent.includes('Mallory')).click())
-  const sheet = render(mocks.sheets.at(-1).render(() => {}))
+  const sheet = render(<AdminUser />)
   await settle()
   return sheet
 }

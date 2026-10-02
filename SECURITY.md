@@ -67,8 +67,10 @@ in the thread; there's no objection, and no request to sit on it indefinitely.
 
 - Anything that already assumes access to the host, to `./data`, or to the Docker socket. The
   operator is trusted by design — see the security model below.
-- Admins reading their users' workout history. That is the documented purpose of the admin
-  dashboard, not a leak.
+- Admins reading their users' workout history, and changing it from the dashboard — restoring a
+  backup, importing an export, deleting a workout or an account. That is the documented purpose of
+  the admin dashboard, not a leak; see the security model below for the guards on it and for what
+  an admin still cannot do.
 - **Missing rate limiting** on anything but password sign-in and device codes, or "I sent 100k
   requests and it got slow". With `PASSWORD_LOGIN=1` the API throttles its password routes —
   sign-in, password signup, reset codes, changing a password — and it always throttles the
@@ -228,9 +230,36 @@ Read this before hosting openGym for anyone other than yourself.
   telemetry tracks of MP4/MOV videos are blanked, but WebM videos are uploaded as recorded, and a
   client other than the app can upload a file with its metadata intact — readable, still, only by
   that same profile.
-- **Admins can read everything.** A user listed in `ADMIN_UIDS` (or flagged `admin: true` in
-  `db.json`) gets every user's full history and body weight, can disable accounts, and can create
-  or revoke invite codes (`api/server.js:825-947`). Off by default — a fresh instance has no admin.
+- **Admins can read everything, and change it.** A user listed in `ADMIN_UIDS` (or flagged
+  `admin: true` in `db.json`) gets every user's full history and body weight, and from the
+  dashboard can also: restore or merge a state file into someone's account, import a CSV export
+  into it, delete individual workouts, roll an account back to a snapshot, promote and demote
+  admins, disable accounts, create and revoke invite codes, and delete an account permanently.
+  Off by default — a fresh instance has no admin.
+
+  What an admin still cannot do through the API: mint a session for another user, read `secret`,
+  `vapid.json` or `db.json` over HTTP, obtain anyone's passkey material, or fetch anyone's photos
+  and videos. A user backup carries training data and preferences only (a workout's media are
+  hashes, not the files), so handing one back to its owner is not handing over a way into their
+  account.
+
+  Four guards sit on every administrative write, and each has a limit worth knowing:
+  - **A snapshot is taken first**, into `./data/snapshots`, newest ten per user
+    (`ADMIN_SNAPSHOT_KEEP`). It is an undo for *admin* actions only — a normal `PUT /api/data`
+    never snapshots, so this is not version history.
+  - **Merging is the default and cannot remove anything**: it deduplicates by day and the day
+    already in the account wins. Replacing needs an explicit confirmation, which the server
+    requires too, so a script cannot skip it.
+  - **Writes are refused while the target is training.** Presence is in-memory and expires about
+    70 seconds after their last heartbeat, so this is a courtesy, not a lock.
+  - **Every administrative write is in `audit.log`**, naming the admin and the target.
+
+  An administrative write moves the profile's revision like any push, so the user's devices pull
+  it — and a device that still owes a change of its own gets the `409` and merges. What a replace,
+  a rollback or a deleted workout removed is stamped the way "Reset everything" stamps a reset
+  (`resetAt`, `resetIds`), so that merge drops it instead of bringing it back. The limit is the
+  merge's own: whatever that device logged in the meantime is kept, and its settings lose to the
+  admin's copy.
 - **Sessions can't be revoked one device at a time.** Revocation is per *account*, not per
   session: `POST /api/logout/all` kills all of them at once and there is no device list to pick
   from. `POST /api/logout` on its own only clears the cookie in that one browser

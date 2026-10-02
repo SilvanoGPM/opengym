@@ -153,3 +153,11 @@
 
 /* a finished step's summary reads as a receipt, not a control */
 .adm-step.done>summary .adm-step-t span{color:var(--acc)}
+
+/* Rows separated by a hairline inside a card, as opposed to `.list`, which is a stack of `.item`
+   cards and deliberately becomes two columns on a wide screen. A routine and its exercise count, or
+   a snapshot and its buttons, belong on one line, and side by side would read as two unrelated
+   lists. Used by the user screen (AdminUser.jsx). */
+.rowlist{display:flex;flex-direction:column}
+.rowlist>*{padding:9px 2px;border-bottom:var(--hair) solid var(--sep)}
+.rowlist>*:last-child{border-bottom:none}

@@ -106,7 +106,10 @@ export async function readBackupFile(file) {
       files.push({ hash: m[1], entry: e })
     }
   } else {
-    state = JSON.parse(await file.text())
+    // A backup the admin panel downloads wraps the same state in an envelope (lib/admin-backup.js),
+    // so a file handed back by whoever runs the server restores like one of your own.
+    const raw = JSON.parse(await file.text())
+    state = raw && raw.opengym_backup ? raw.state : raw
     if (!isBackup(state)) throw new Error('not an openGym backup')
   }
   return { state: sanitizeCustomMedia(state), files, zip }

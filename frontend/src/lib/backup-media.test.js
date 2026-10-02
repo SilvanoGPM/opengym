@@ -77,6 +77,15 @@ describe('import', () => {
     expect(read.state.customEx[1].media.mime).toBe('image/jpeg')
   })
 
+  it('a backup the admin panel downloaded reads like your own', async () => {
+    // lib/admin-backup.js wraps the state in an envelope; the state inside is the same document.
+    const S = stateWith([{ id: 'a' }])
+    const envelope = { opengym_backup: 1, exported: '2026-09-01T00:00:00Z', app: 'x', user: { id: 'u1', name: 'Ana' }, state: S }
+    const read = await readBackupFile(new File([JSON.stringify(envelope)], 'opengym-ana.json', { type: 'application/json' }))
+    expect(read.state.customEx.map(c => c.id)).toEqual(['a'])
+    expect(read.state.opengym_backup).toBeUndefined()
+  })
+
   it('refuses what is not an openGym backup, zipped or not', async () => {
     await expect(readBackupFile(new File(['{"hello":1}'], 'x.json'))).rejects.toThrow()
     const zip = await zipStore([{ name: 'something.txt', blob: new Blob(['x']) }])
