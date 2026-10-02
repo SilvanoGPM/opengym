@@ -5,14 +5,27 @@ import { MOBILE } from './lib/mobile.js'
 import { useStore } from './store/useStore.js'
 import { startMediaSync } from './lib/media-sync.js'
 import { startNativeKeyboard } from './lib/native-keyboard.js'
+import { setLang, baseLang } from './lib/i18n.js'
+import { effectiveLang } from './lib/default-lang.js'
 import './index.css'
 
 // App.jsx restores per-route scroll itself; the browser's own attempt races it.
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual'
 
-createRoot(document.getElementById('root')).render(
-  <StrictMode><App /></StrictMode>
-)
+// The chosen language is known synchronously — it comes out of localStorage with the rest of the
+// state, before React is even created — but the strings for it are a lazily loaded chunk. Asking
+// for them from an effect meant the first paint always happened in English and switched over a
+// beat later. Loading the pack first costs one small chunk (~30 kB) and removes the flash; the
+// bulky instruction and exercise-name packs are not waited on (see setLang), so this stays quick
+// even in the languages whose content packs run to a megabyte. Worked out exactly as App.jsx does,
+// so its own setLang finds the language already applied and returns at once.
+const boot = useStore.getState().S
+const bootLang = effectiveLang(boot, useStore.getState().config)
+setLang(bootLang, boot.enParens?.[baseLang(bootLang)] ?? true, boot.enOnly?.[baseLang(bootLang)] === true).finally(() => {
+  createRoot(document.getElementById('root')).render(
+    <StrictMode><App /></StrictMode>
+  )
+})
 
 // The photos and videos of custom exercises, in every build (the phone and the demo included):
 // uploads of what the server lacks, the local clean-up, and the plan's files kept offline.
