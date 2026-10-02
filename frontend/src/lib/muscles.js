@@ -9,6 +9,7 @@
 
 import { isWarmupRow } from './workout-model.js'
 import { EXIDX, smOf } from './exercises.js'
+import { todayISO, weekKey, MONDAY } from './format.js'
 
 // The muscles a map can shade, in head-to-toe order — also the order of any list
 // built from them, so "what am I neglecting" reads top-down like a body.
@@ -20,16 +21,25 @@ export const MUSCLES = [
   'calves', 'tibialis',
 ]
 
+// A picked list in the map's own order rather than the order the chips were tapped in — two
+// people building the same exercise get the same exercise. Unknown names keep their place at the end.
+export const inMuscleOrder = list => {
+  const at = m => { const i = MUSCLES.indexOf(m); return i < 0 ? MUSCLES.length : i }
+  return [...(list || [])].sort((a, b) => at(a) - at(b))
+}
+
 // Drawn as the silhouette, never shaded: they carry no training load.
 export const INERT = ['head', 'hair', 'neck', 'hands', 'feet', 'knees', 'ankles']
 
-// English display names; these strings are the i18n keys (see lib/i18n.js).
+// English display names; these strings are the i18n keys (see lib/i18n.js). The packs know
+// the cardio pseudo-muscle only under the dataset's own lowercase spelling, and every place
+// that shows it capitalises with CSS — a capitalised key here rendered English everywhere.
 export const MUSCLE_NAME = {
   trapezius: 'Traps', deltoids: 'Shoulders', chest: 'Chest', 'upper-back': 'Upper back',
   serratus: 'Serratus', biceps: 'Biceps', triceps: 'Triceps', forearm: 'Forearms',
   abs: 'Abs', obliques: 'Obliques', 'lower-back': 'Lower back', gluteal: 'Glutes',
   quadriceps: 'Quads', hamstring: 'Hamstrings', adductors: 'Adductors',
-  'hip-flexors': 'Hip flexors', calves: 'Calves', tibialis: 'Shins',
+  'hip-flexors': 'Hip flexors', calves: 'Calves', tibialis: 'Shins', 'cardiovascular system': 'cardiovascular system',
 }
 
 // Every spelling that occurs in the dataset's `tg` and `sm` fields. null = not drawable.
@@ -39,7 +49,7 @@ const ALIAS = {
   triceps: 'triceps', 'upper back': 'upper-back', lats: 'upper-back', calves: 'calves',
   quads: 'quadriceps', forearms: 'forearm', hamstrings: 'hamstring', spine: 'lower-back',
   traps: 'trapezius', adductors: 'adductors', 'serratus anterior': 'serratus',
-  abductors: 'gluteal', 'levator scapulae': 'trapezius', 'cardiovascular system': null,
+  abductors: 'gluteal', 'levator scapulae': 'trapezius', 'cardiovascular system': 'cardiovascular system',
   // secondaries
   shoulders: 'deltoids', deltoids: 'deltoids', 'rear deltoids': 'deltoids',
   'rotator cuff': 'deltoids', quadriceps: 'quadriceps', core: 'abs', abdominals: 'abs',
@@ -160,7 +170,7 @@ export function muscleGroupsOf(entry) {
     ? [...parts.primary, ...parts.secondary]
     : explicit || [ex?.tg, ex?.mg, ...arrayOf(smOf(ex))]
   const out = canonicalUnique(source)
-  if (!out.length && !useParts && explicit == null) {
+  if (!out.length && !useParts) {
     canonicalUnique(Object.keys(BY_BODYPART[ex?.bp] || {})).forEach(slug => out.push(slug))
   }
   return out
@@ -259,6 +269,20 @@ export const loadOfWorkouts = (workouts, pick) =>
   loadOf((workouts || []).flatMap(w =>
     (w.entries || []).map(e => ({ id: e.id, ex: e.exercise || e, sets: (e.sets || []).filter(s => s.done && !isWarmupRow(s) && (!pick || pick(s))).length }))))
 
+/**
+ * Workouts in one existing Muscle balance range, with time injected for deterministic tests.
+ *
+ * The 7-day range is "this week", not "the last seven days", so it moves with the profile's
+ * first weekday — the caller passes it since this takes workouts rather than the whole state.
+ */
+export function muscleBalanceWindow(workouts, win, now = Date.now(), today = todayISO(), ws = MONDAY) {
+  return (workouts || []).filter(workout => win === 0
+    ? true
+    : win === 7
+      ? weekKey(workout.d, ws) === weekKey(today, ws)
+      : (workout.start || new Date(workout.d).getTime()) > now - win * 86400000)
+}
+
 /** Load a routine *would* produce, from its planned set counts. */
 export const loadOfRoutine = routine =>
   loadOf((routine?.ex || []).map(c => ({ id: c.id, ex: c, sets: c.sets || 1 })))
@@ -304,7 +328,8 @@ export function levelsOf(load, thresholds) {
 
 /** Muscles sorted hardest-worked first; untrained ones last, in body order. */
 export function rankOf(load) {
-  const worked = MUSCLES.filter(m => (load[m] || 0) > 0).sort((a, b) => load[b] - load[a])
+  const worked = MUSCLES.filter(m => (load[m] || 0) > 0)
+    .sort((a, b) => load[b] - load[a] || MUSCLES.indexOf(a) - MUSCLES.indexOf(b))
   const missed = MUSCLES.filter(m => !(load[m] > 0))
   return { worked, missed }
 }

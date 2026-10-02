@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -29,16 +30,43 @@ const umami = {
   }
 }
 
+// The service worker's cache is named after the build (public/sw.js carries a `__BUILD__`
+// placeholder): a deploy is then a new worker with its own cache, and the previous build's
+// shell and chunks are dropped on activate instead of piling up under one fixed name. The
+// stamp is a hash of the built index.html — it changes exactly when the bundle does.
+const swStamp = {
+  name: 'opengym-sw-stamp',
+  apply: 'build',
+  closeBundle() {
+    const dir = new URL('./dist/', import.meta.url)
+    const html = new URL('index.html', dir), sw = new URL('sw.js', dir)
+    if (!existsSync(html) || !existsSync(sw)) return
+    const stamp = createHash('sha256').update(readFileSync(html)).digest('hex').slice(0, 10)
+    writeFileSync(sw, readFileSync(sw, 'utf8').replace('__BUILD__', stamp))
+  }
+}
+
 // The version people are asked for in #install-help and on every bug report. Read from
 // package.json so it cannot drift from the release it was built in, and inlined at build
 // time so no runtime fetch is involved.
+//
+// APP_BUILD, when the build sets it, is appended as "1.3.8+<build>". A packaged build carries a
+// version its package.json cannot know — every image built between two releases reports the same
+// number, so the one question a bug report turns on, "which build were you running?", had no
+// answer from inside the app. Unset (the ordinary case, and every upstream build) it changes
+// nothing: the string is exactly package.json's version.
 const pkgVersion = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version
+const appVersion = process.env.APP_BUILD ? `${pkgVersion}+${process.env.APP_BUILD}` : pkgVersion
 
 export default defineConfig({
-  define: { __APP_VERSION__: JSON.stringify(pkgVersion) },
-  plugins: [react(), umami],
+  define: { __APP_VERSION__: JSON.stringify(appVersion) },
+  plugins: [react(), umami, swStamp],
   base: './',
   server: {
+    // The Coach's core (payload, validator, prompts, HTTP adapters) lives in ../api/coach/core
+    // and is imported by the phone build. vite build and vitest already reach it; the dev
+    // server needs to be told the workspace is wider than frontend/.
+    fs: { allow: ['..'] },
     proxy: {
       '/api': { target: backend, changeOrigin: true, headers: { Origin: apiOrigin } },
       '/img': { target: media, changeOrigin: true },

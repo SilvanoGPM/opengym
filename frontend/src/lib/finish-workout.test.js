@@ -1,22 +1,179 @@
 import { describe, expect, it } from 'vitest'
-import { buildCompletedWorkout, backdatedStart, insertWorkout, nextExWeight } from './finish-workout.js'
-import { durPart, isoOf } from './format.js'
-import { nextPrescription, sessionsFor, stallCount } from './progression.js'
-import { lastEntryFor } from './history.js'
-import { EXDB } from './exercises.js'
+import { buildCompletedWorkout } from './finish-workout.js'
+import { cascadeWeight } from './history.js'
+import { buildSessionEntries } from './session-start.js'
+import { makeSideSet, setSideField, toggleSide, WEIGHT_ORIGIN_MANUAL } from './workout-model.js'
 
 describe('completed workout boundary', () => {
   it('builds the same legacy-shaped record doFinishWorkout stores and keeps it visible', () => {
     const active = {
-      id: 'active-1', d: '2026-08-08', start: 1000, routineId: 'routine-1', name: 'Push', bw: 80,
+      id: 'active-1', d: '2026-08-08', start: 1000, routineIds: ['routine-1'], name: 'Push', bw: 80,
       entries: [{ id: '0025', sets: [{ done: true, w: 60, r: 8 }], topW: 60, target: { sets: 1, reps: 8 } }],
     }
     const completed = buildCompletedWorkout(active, { end: 2000, prs: [] })
     expect(completed).toEqual({
-      id: 'active-1', d: '2026-08-08', start: 1000, end: 2000, routineId: 'routine-1', name: 'Push', bw: 80,
+      id: 'active-1', d: '2026-08-08', start: 1000, end: 2000,
+      routineIds: ['routine-1'], routineId: 'routine-1', name: 'Push', bw: 80,
       entries: [{ id: '0025', sets: [{ done: true, w: 60, r: 8 }], topW: 60, target: { sets: 1, reps: 8 } }],
       prs: []
     })
+  })
+
+  // planSec is live-session bookkeeping — the plan a hold displaced before it finished put aside
+  // (Workout.startTimed). A finished session keeps only what was logged, so an unfinished row goes
+  // back to recording its plan and the key never reaches S.workouts.
+  it('never stores planSec: an unfinished row goes back to recording its plan', () => {
+    const active = {
+      id: 'a', d: '2026-09-18', start: 1000,
+      entries: [{
+        id: 'plank',
+        sets: [
+          { done: true, sec: 30, w: 0 },
+          { done: false, sec: 3, planSec: 30, w: 0 },
+          { done: true, sec: 28, planSec: 45, w: 0 },
+        ],
+      }],
+    }
+    const sets = buildCompletedWorkout(active, { end: 2000 }).entries[0].sets
+    expect(sets).toEqual([
+      { done: true, sec: 30, w: 0 },
+      { done: false, sec: 30, w: 0 },      // the plan it was asking for, and what it held is gone
+      { done: true, sec: 28, w: 0 },       // a logged row keeps its log
+    ])
+    expect(JSON.stringify(sets)).not.toContain('planSec')
+  })
+
+  // weightOrigin marks a load typed by hand during the session so a later edit of an earlier set
+  // does not cascade over it (#209). History has nothing left to cascade: the saved rows carry
+  // only the loads, and the plan the session was built from (`planned`) is kept as it was.
+  it('never stores weightOrigin, on a row or on either side, and keeps the plan stamps', () => {
+    const planned = { sets: 3, reps: 5, weight: 100 }
+    let rows = [{ w: 100, r: 5, done: true }, { w: 100, r: 5, done: false }, { w: 100, r: 5, done: false }]
+    rows[2] = { ...rows[2], w: 95, weightOrigin: WEIGHT_ORIGIN_MANUAL }
+    rows[1] = { ...rows[1], w: 105, weightOrigin: WEIGHT_ORIGIN_MANUAL }
+    rows = cascadeWeight(rows, 1, 105)
+    expect(rows[2]).toMatchObject({ w: 95, weightOrigin: WEIGHT_ORIGIN_MANUAL })   // a manual row stays put
+    rows = rows.map(row => ({ ...row, done: true }))
+    let side = setSideField(makeSideSet({ w: 20, r: 16 }), 'L', 'w', 22.5)
+    side.sides.L.weightOrigin = WEIGHT_ORIGIN_MANUAL
+    side = toggleSide(toggleSide(side, 'L'), 'R')
+
+    const active = {
+      id: 'a', d: '2026-09-18', start: 1000, routineIds: ['r'],
+      entries: [
+        { id: '0025', rid: 'r', target: { ...planned }, planned, sets: rows },
+        { id: 'lunge', rid: 'r', target: { sets: 1, reps: 16, side: true }, sets: [side] },
+      ],
+    }
+    const saved = buildCompletedWorkout(active, { end: 2000 })
+    expect(JSON.stringify(saved)).not.toContain('weightOrigin')
+    expect(saved.entries[0].sets.map(s => s.w)).toEqual([100, 105, 95])
+    expect(saved.entries[0].planned).toEqual(planned)
+    expect(saved.entries[1].sets[0].sides).toMatchObject({ L: { w: 22.5, done: true }, R: { w: 20, done: true } })
+    // The live rows keep their marks until the session is over.
+    expect(active.entries[0].sets[2].weightOrigin).toBe(WEIGHT_ORIGIN_MANUAL)
+
+    // The next session of the plan reads the loads back and carries no mark of its own.
+    const st = { unit: 'kg', exWeights: {}, routines: [{ id: 'r', ex: [{ id: '0025', ...planned }] }], workouts: [saved] }
+    const next = buildSessionEntries(st, st.routines[0])[0]
+    expect(JSON.stringify(next.sets)).not.toContain('weightOrigin')
+  })
+
+  it('leaves the rows it has nothing to strip exactly as they are', () => {
+    const rows = [{ done: true, w: 60, r: 8 }]
+    const active = { id: 'a', d: '2026-09-18', start: 1000, entries: [{ id: '0025', sets: rows }] }
+    expect(buildCompletedWorkout(active, { end: 2000 }).entries[0].sets[0]).toBe(rows[0])
+  })
+
+  it('mirrors routineIds → routineId, and tolerates a legacy scalar active.routineId', () => {
+    const base = {
+      id: 'w', d: '2026-08-08', start: 1,
+      entries: [{ id: '0025', sets: [{ done: true, w: 60, r: 8 }], target: { sets: 1, reps: 8 } }],
+    }
+    const combined = buildCompletedWorkout({ ...base, routineIds: ['a', 'b'] })
+    expect(combined.routineIds).toEqual(['a', 'b'])
+    expect(combined.routineId).toBe('a')
+
+    const legacy = buildCompletedWorkout({ ...base, routineId: 'only' })
+    expect(legacy.routineIds).toEqual(['only'])
+    expect(legacy.routineId).toBe('only')
+
+    const freestyle = buildCompletedWorkout(base)
+    expect(freestyle.routineIds).toEqual([])
+    expect(freestyle.routineId).toBe(null)
+  })
+
+  it('carries per-entry rid and noProg onto the saved entry, written only when set', () => {
+    const active = {
+      id: 'w', d: '2026-08-08', start: 1, routineIds: ['strength', 'rehab'],
+      entries: [
+        { id: '0025', rid: 'strength', sets: [{ done: true, w: 60, r: 8 }], target: { sets: 1, reps: 8 } },
+        { id: '0031', rid: 'rehab', noProg: true, sets: [{ done: true, w: 10, r: 12 }], target: { sets: 1, reps: 12 } },
+      ],
+    }
+    const [a, b] = buildCompletedWorkout(active).entries
+    expect(a.rid).toBe('strength')
+    expect('noProg' in a).toBe(false)
+    expect(b.rid).toBe('rehab')
+    expect(b.noProg).toBe(true)
+  })
+
+  it('keeps the plan each entry was built from, next to the target the prescription moved', () => {
+    const active = {
+      id: 'w', d: '2026-08-08', start: 1, routineIds: ['strength'],
+      entries: [
+        { id: '0025', rid: 'strength', planned: { sets: 2, reps: 10, weight: 60 }, sets: [{ done: true, w: 62.5, r: 10 }], target: { sets: 2, reps: 10, weight: 62.5 } },
+        { id: '0031', sets: [{ done: true, w: 10, r: 12 }], target: { sets: 1, reps: 12 } },
+      ],
+    }
+    const [a, b] = buildCompletedWorkout(active).entries
+    expect(a.planned).toEqual({ sets: 2, reps: 10, weight: 60 })
+    expect('planned' in b).toBe(false)
+  })
+
+  it('derives topW from the highest completed non-warm-up work set, not stale entry data', () => {
+    const active = {
+      id: 'active-1', d: '2026-08-08', start: 1000,
+      entries: [{
+        id: '0025', topW: 80, target: { mode: 'reps', sets: 2, reps: 8 },
+        sets: [
+          { phase: 'warmup', done: true, w: 120, r: 8 },
+          { done: true, w: 75, r: 8 },
+          { done: true, w: 85, r: 7 },
+          { done: false, w: 100, r: 8 },
+        ],
+      }],
+    }
+
+    expect(buildCompletedWorkout(active).entries[0].topW).toBe(85)
+    expect(buildCompletedWorkout({
+      ...active,
+      entries: [{ ...active.entries[0], topW: 120 }],
+    }).entries[0].topW).toBe(85)
+  })
+
+  it('keeps a legacy topW when old completed rows have no usable weight', () => {
+    const active = {
+      id: 'active-1', d: '2026-08-08', start: 1000,
+      entries: [{ id: '0025', topW: 60, sets: [{ done: true, r: 8 }] }],
+    }
+
+    expect(buildCompletedWorkout(active).entries[0].topW).toBe(60)
+  })
+
+  it('writes the legacy excludeFromProgression mirror iff every completed entry is noProg', () => {
+    const mk = entries => ({ id: 'w', d: '2026-08-08', start: 1, routineIds: ['x'], entries })
+    const done = extra => ({ id: '0025', sets: [{ done: true, w: 30, r: 8 }], target: { sets: 1, reps: 8 }, ...extra })
+
+    // rehab-only combined session → present
+    expect(buildCompletedWorkout(mk([done({ noProg: true }), done({ id: '0031', noProg: true })])))
+      .toHaveProperty('excludeFromProgression', true)
+    // rehab + strength → absent
+    expect(buildCompletedWorkout(mk([done({ noProg: true }), done({ id: '0031' })])))
+      .not.toHaveProperty('excludeFromProgression')
+    // all-normal → absent
+    expect(buildCompletedWorkout(mk([done(), done({ id: '0031' })])))
+      .not.toHaveProperty('excludeFromProgression')
   })
 
   it('persists a muscle snapshot only when the caller supplies one', () => {
@@ -74,155 +231,33 @@ describe('session notes', () => {
   })
 })
 
-describe('backdated sessions', () => {
-  it('collapses the duration of a session filled in after the fact', () => {
-    const active = { id: 'a1', d: '2026-08-08', start: 5000, back: true, entries: [{ id: '0025', sets: [{ done: true, w: 60, r: 8 }] }] }
-    // `end` is what the clock said when Finish was tapped — days later. Keeping it would report
-    // a three-day workout; durPart() leaves a zero-length one out entirely.
-    const completed = buildCompletedWorkout(active, { end: 999999999, prs: [] })
-    expect(completed.end).toBe(5000)
-    expect(durPart(completed.end - completed.start)).toEqual([])
+// Discord (rubik_97): supersets appeared nowhere once the workout was saved, because the finish
+// whitelist dropped the group tag every other screen reads them from.
+describe('superset groups', () => {
+  const done = { w: 40, r: 10, done: true }
+  const open = { w: 40, r: 10, done: false }
+  const active = entries => ({ id: 'w', d: '2026-09-17', start: 1, routineIds: ['r1'], name: 'Arms', entries })
+
+  it('keeps the group on every member that was trained', () => {
+    const w = buildCompletedWorkout(active([
+      { id: 'a', sg: 'sg1', sets: [done], target: {} },
+      { id: 'b', sg: 'sg1', sets: [done], target: {} },
+      { id: 'c', sets: [done], target: {} },
+    ]))
+    expect(w.entries.map(e => e.sg)).toEqual(['sg1', 'sg1', undefined])
+    expect('sg' in w.entries[2]).toBe(false)
   })
 
-  it('keeps the real clock on a live session', () => {
-    const active = { id: 'a1', d: '2026-08-08', start: 5000, entries: [{ id: '0025', sets: [{ done: true, w: 60, r: 8 }] }] }
-    expect(buildCompletedWorkout(active, { end: 3605000, prs: [] }).end).toBe(3605000)
-  })
-
-  it('never writes the back flag into the stored record', () => {
-    const active = { id: 'a1', d: '2026-08-08', start: 5000, back: true, entries: [{ id: '0025', sets: [{ done: true }] }] }
-    expect(buildCompletedWorkout(active, { end: 5000 })).not.toHaveProperty('back')
-  })
-})
-
-describe('backdatedStart', () => {
-  it('files the session at 18:00 local on the day it belongs to', () => {
-    const at = new Date(backdatedStart('2026-08-25'))
-    expect(at.getHours()).toBe(18)
-    expect(at.getMinutes()).toBe(0)
-  })
-
-  it('lands on the given day in every timezone', () => {
-    // The guard this exists for: new Date('2026-08-25') is UTC midnight, which is still the
-    // 24th anywhere west of Greenwich — recovery.js and effort.js both fall back to it.
-    for (const iso of ['2026-01-01', '2026-06-15', '2026-12-31']) {
-      expect(isoOf(new Date(backdatedStart(iso)))).toBe(iso)
-    }
-  })
-
-  it('agrees with the timestamp import-csv gives a row with no time column', () => {
-    const iso = '2026-03-09'
-    expect(backdatedStart(iso)).toBe(new Date(iso + 'T00:00:00').getTime() + 18 * 3600000)
-  })
-})
-
-describe('insertWorkout', () => {
-  const w = d => ({ id: 'w' + d, d })
-
-  it('appends when the session is the newest — the everyday path', () => {
-    const list = [w('2026-01-01'), w('2026-01-08')]
-    expect(insertWorkout(list, w('2026-01-15')).map(x => x.d))
-      .toEqual(['2026-01-01', '2026-01-08', '2026-01-15'])
-  })
-
-  it('does not mutate the history it was given', () => {
-    const list = [w('2026-01-01'), w('2026-01-08')]
-    insertWorkout(list, w('2026-01-04'))
-    expect(list.map(x => x.d)).toEqual(['2026-01-01', '2026-01-08'])
-  })
-
-  it('drops a backdated session into its place in the middle', () => {
-    const list = [w('2026-01-01'), w('2026-01-08'), w('2026-01-15')]
-    expect(insertWorkout(list, w('2026-01-10')).map(x => x.d))
-      .toEqual(['2026-01-01', '2026-01-08', '2026-01-10', '2026-01-15'])
-  })
-
-  it('puts a session older than everything at the front', () => {
-    const list = [w('2026-01-08'), w('2026-01-15')]
-    expect(insertWorkout(list, w('2025-12-30')).map(x => x.d))
-      .toEqual(['2025-12-30', '2026-01-08', '2026-01-15'])
-  })
-
-  it('files a second session for a day after the ones already there', () => {
-    // Two sessions in one day is allowed, and the one logged second is the later one.
-    const list = [w('2026-01-08'), { id: 'morning', d: '2026-01-10' }, w('2026-01-15')]
-    expect(insertWorkout(list, { id: 'evening', d: '2026-01-10' }).map(x => x.id))
-      .toEqual(['w2026-01-08', 'morning', 'evening', 'w2026-01-15'])
-  })
-
-  it('starts a history that does not exist yet', () => {
-    expect(insertWorkout(undefined, w('2026-01-01')).map(x => x.d)).toEqual(['2026-01-01'])
-    expect(insertWorkout([], w('2026-01-01')).map(x => x.d)).toEqual(['2026-01-01'])
-  })
-})
-
-describe('insertWorkout keeps the progression engine reading the right session', () => {
-  // sessionsFor/stallCount and lastEntryFor all take "the most recent session" to be the last
-  // element of S.workouts. Appending a backdated one would silently make a session from two
-  // weeks ago the basis for the next prescription.
-  const LIFT = EXDB.find(e => e.bp !== 'cardio').id
-  const session = (d, weight, reps) => ({
-    id: 'w' + d, d,
-    entries: [{
-      id: LIFT,
-      target: { sets: 3, reps: 5, weight },
-      sets: reps.map(r => ({ w: weight, r, done: true })),
-    }],
-  })
-  const cfg = { id: LIFT, sets: 3, reps: 5, weight: 65 }
-  const state = workouts => ({ unit: 'kg', workouts })
-
-  const live = [session('2026-01-01', 60, [5, 5, 5]), session('2026-01-08', 65, [5, 5, 5])]
-  const missed = session('2026-01-05', 40, [5, 5, 5])
-
-  it('leaves the next prescription untouched when a missed day is filled in', () => {
-    const before = nextPrescription(state(live), cfg)
-    const after = nextPrescription(state(insertWorkout(live, missed)), cfg)
-    expect(after).toEqual(before)
-    expect(after.weight).not.toBe(40)
-  })
-
-  it('still reads the newest session as the last one', () => {
-    const sessions = sessionsFor(state(insertWorkout(live, missed)), LIFT, cfg)
-    expect(sessions.map(s => s.d)).toEqual(['2026-01-01', '2026-01-05', '2026-01-08'])
-    expect(sessions[sessions.length - 1].weight).toBe(65)
-  })
-
-  it('does not count an old failed session as a current stall', () => {
-    const failed = session('2026-01-05', 65, [5, 5, 2])
-    expect(stallCount(sessionsFor(state(insertWorkout(live, failed)), LIFT, cfg))).toBe(0)
-  })
-
-  it('keeps "last time" pointing at the newest session', () => {
-    expect(lastEntryFor(state(insertWorkout(live, missed)), LIFT).d).toBe('2026-01-08')
-  })
-})
-
-describe('nextExWeight', () => {
-  it('seeds a lift that has no suggestion yet', () => {
-    expect(nextExWeight(undefined, { w: 60, d: '2026-01-08' })).toEqual({ w: 60, d: '2026-01-08' })
-  })
-
-  it('refuses to let a backdated session overwrite a newer suggestion', () => {
-    // The whole point: logging a heavy Tuesday you forgot must not move the number Wednesday set.
-    const cur = { w: 60, d: '2026-01-08' }
-    expect(nextExWeight(cur, { w: 100, d: '2026-01-05' })).toBe(cur)
-  })
-
-  it('takes the heavier weight on the same day or later', () => {
-    expect(nextExWeight({ w: 60, d: '2026-01-08' }, { w: 65, d: '2026-01-08' })).toEqual({ w: 65, d: '2026-01-08' })
-    expect(nextExWeight({ w: 60, d: '2026-01-08' }, { w: 65, d: '2026-01-15' })).toEqual({ w: 65, d: '2026-01-15' })
-  })
-
-  it('keeps the current suggestion when a later session went lighter', () => {
-    // Unchanged legacy behaviour: a deload does not drop the working weight you have proven.
-    const cur = { w: 60, d: '2026-01-08' }
-    expect(nextExWeight(cur, { w: 50, d: '2026-01-15' })).toBe(cur)
-  })
-
-  it('records nothing for a session with no load', () => {
-    expect(nextExWeight(undefined, { w: 0, d: '2026-01-08' })).toBe(null)
-    const cur = { w: 60, d: '2026-01-08' }
-    expect(nextExWeight(cur, { w: 0, d: '2026-01-15' })).toBe(cur)
+  it('drops the tag of a member whose partner was never trained', () => {
+    const entries = [
+      { id: 'a', sg: 'sg1', sets: [done], target: {} },
+      { id: 'b', sg: 'sg1', sets: [open], target: {} },
+      { id: 'c', sets: [done], target: {} },
+    ]
+    const w = buildCompletedWorkout(active(entries))
+    expect(w.entries.map(e => e.id)).toEqual(['a', 'c'])
+    expect('sg' in w.entries[0]).toBe(false)
+    // the running session is not the one tidied up
+    expect(entries[0].sg).toBe('sg1')
   })
 })
