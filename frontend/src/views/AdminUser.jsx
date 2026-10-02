@@ -16,7 +16,7 @@ import LineChart from '../components/LineChart.jsx'
 import { Thumb } from '../components/Media.jsx'
 import { glyphOf } from '../lib/glyphs.js'
 import Icon from '../components/Icon.jsx'
-import { Button, TextField } from '../components/ui.jsx'
+import { Button, TextField, Segmented } from '../components/ui.jsx'
 import '../admin.css'
 
 // One user, for whoever runs the server. A route rather than a sheet: this carries the history,
@@ -383,12 +383,11 @@ export default function AdminUser() {
     </div>}
 
     {(d.monthly || []).length > 0 && <div className="card">
-      <div className="row between" style={{ marginBottom: 6 }}>
-        <h2 style={{ margin: 0 }}>Volume</h2>
-        <div className="seg">{RANGES.map(r => (
-          <button key={r.k} className={range === r.k ? 'on' : ''} onClick={() => setRange(r.k)}>{r.label}</button>
-        ))}</div>
-      </div>
+      <h2>Volume</h2>
+      {/* Full width, as Stats lays its range picker out: squeezed beside the title its buttons
+          shrank until "12 months" broke over two lines. */}
+      <Segmented className="seg-range" value={range} onChange={setRange}
+        options={RANGES.map(r => ({ value: r.k, label: r.label }))} />
       <div className="chart"><LineChart points={volPoints} h={140} unit={d.unit} /></div>
       <div className="dim small" style={{ marginTop: 6 }}>
         {rangeTotal} workouts in this range
