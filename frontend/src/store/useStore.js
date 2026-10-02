@@ -1108,6 +1108,19 @@ export const useStore = create((set, get) => {
 
     // `adopt` (a sign-in, a pairing — { alwaysAsk } for a device link): adoptProfile follows and
     // decides what becomes of this copy; until it has, nothing is pulled or pushed (ADOPT_KEY).
+    // A field of the signed-in user that changed on the server — the ranking flag, the display
+    // name. The same user, so none of setUser's bookkeeping (owner, adoption, sync hold) applies.
+    patchUser(fields) {
+      const u = get().user
+      if (!u) return
+      const next = { ...u, ...fields }
+      try {
+        localStorage.setItem('gym_user', JSON.stringify(next))
+        if ('name' in fields) localStorage.setItem('gym_owner_name', next.name || '')
+      } catch { /* storage unavailable: the next /api/me says the same */ }
+      set({ user: next })
+    },
+
     setUser(u, { adopt } = {}) {
       if (u) {
         // The local copy belongs to whoever last signed in here. When a session expires or is

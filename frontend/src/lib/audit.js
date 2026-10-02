@@ -64,6 +64,8 @@ const LABELS = {
   'admin.user.promote': 'Made someone an admin',
   'admin.user.demote': 'Removed someone’s admin',
   'admin.audit.export': 'Exported the activity log',
+  'auth.ranking': 'Joined or left the ranking',
+  'auth.rename': 'Changed their display name',
   'admin.password.reset': 'Issued a password reset code',
   'admin.invite.create': 'Created an invite code',
   'admin.invite.revoke': 'Revoked an invite code',

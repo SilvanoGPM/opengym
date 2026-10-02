@@ -135,6 +135,10 @@ tags:
     description: >-
       More than one passkey on a profile: list, add, rename, remove — and one-time device
       links, which let another device of the same person add a passkey of its own.
+  - name: ranking
+    description: >-
+      The profiles on this instance compared — check-ins and volume, for those who joined
+      (`LEADERBOARD`).
   - name: data
     description: Per-user state sync (the whole app state as one JSON blob)
   - name: push
@@ -2165,6 +2169,132 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
               example: { error: "no such user" }
+
+  /api/me/name:
+    post:
+      tags: [auth]
+      operationId: meRename
+      summary: Change your display name
+      description: >-
+        The name other profiles see in the ranking, and the one shown in the admin dashboard.
+        Trimmed and capped at 40 characters, as at registration. A profile that signs in with
+        its name (a password, or an unused reset code) cannot take a name another such profile
+        signs in with. Audited (`auth.rename`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 40 }
+      responses:
+        '200':
+          description: Renamed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string }
+        '400':
+          description: '`missing` — no name.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409':
+          description: '`name-taken` — another profile signs in with that name.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/leaderboard:
+    get:
+      tags: [ranking]
+      operationId: leaderboard
+      summary: The ranking over a date range
+      description: >-
+        One row per profile that joined the ranking, unordered (the client ranks and breaks
+        ties): its name, the distinct days it trained (`checkins`), its sessions, and its total
+        volume in kg whatever its unit — summed from the volume each workout stored, never
+        recomputed. A caller that has not joined gets no rows, only the count. 404 while the
+        instance runs with `LEADERBOARD=0`.
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, format: date }, description: First day, inclusive. }
+        - { name: to, in: query, required: true, schema: { type: string, format: date }, description: Last day, inclusive. }
+      responses:
+        '200':
+          description: The rows.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  me: { type: string, description: The caller's user id. }
+                  participants: { type: integer }
+                  rows:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        uid: { type: string }
+                        name: { type: string }
+                        checkins: { type: integer }
+                        sessions: { type: integer }
+                        volKg: { type: number }
+                        volUnknown: { type: integer, description: Sessions with no stored volume (imported history), not in `volKg`. }
+        '400':
+          description: '`from` or `to` is not a YYYY-MM-DD day, or `from` is after `to`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: The ranking is switched off on this instance.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/leaderboard/opt:
+    post:
+      tags: [ranking]
+      operationId: leaderboardOpt
+      summary: Join or leave the ranking
+      description: >-
+        Kept on the user record, not in the synced state, so no device holding an older copy can
+        put anyone back on the board. Audited (`auth.ranking`). 404 while the instance runs
+        with `LEADERBOARD=0`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [on]
+              properties:
+                on: { type: boolean }
+      responses:
+        '200':
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lb: { type: boolean }
+        '400':
+          description: '`on` is not a boolean.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: The ranking is switched off on this instance.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /api/admin/presence:
     get:

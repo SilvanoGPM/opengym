@@ -335,6 +335,30 @@ that only has a password cannot sign in.
 The mobile app keeps pairing: someone with a password signs in to the website with it and pairs
 from Settings → "Pair the mobile app", as with a passkey.
 
+### The ranking (optional, on)
+
+Profiles on this instance can be ranked against each other — how many days each person trained,
+and how much total volume they moved — by week, month, year or all time. It is on by default and
+does nothing until somebody joins:
+
+```bash
+LEADERBOARD=0              # removes the routes and the setting entirely
+```
+
+**Nobody appears without joining from their own Settings, and the flag is per person.** Nothing of
+it leaves your instance, which is why it isn't gated off by default — the individual opt-in is the
+real switch. Set `LEADERBOARD=0` if you'd rather the feature not exist on your server at all.
+
+What crosses between profiles is only a display name, a count of days trained and a total volume.
+Exercises, loads, body weight, notes and session times never do, in either direction: someone who
+hasn't joined is not listed, and is not shown the list either. Joining and leaving are both
+recorded in the activity log as `auth.ranking`, and a changed display name as `auth.rename`, so an
+operator can see who is on it and when that changed.
+
+Volume is compared in kilos whatever each profile's unit, and each week starts on the viewer's own
+first weekday. A profile that switched units with "keep the numbers, change the label" keeps its
+old numbers, so they are read as the current unit — the same caveat its own charts carry.
+
 ## 5. Fitting it into an existing stack
 
 Running Kubernetes? Example manifests (Deployment, PVCs, Service, Gateway API route) are in

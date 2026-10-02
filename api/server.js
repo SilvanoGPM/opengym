@@ -35,6 +35,7 @@ import { summarize } from './user-summary.js';
 import { mergeState, replaceState, stampRemoval } from './state-merge.js';
 import { SNAPSHOT_DIR, snapshotName, snapshotsFor, snapshotsToPrune } from './snapshots.js';
 import { canAdminWrite } from './admin-write.js';
+import { dailyRoll, isDay, rangeTotals } from './leaderboard.js';
 
 const PORT = +(process.env.PORT || 3000);
 const DATA = process.env.DATA_DIR || '/data';
@@ -50,6 +51,10 @@ const INVITE_ONLY = /^(1|true|yes|on)$/i.test(process.env.INVITE_ONLY || '');
 // out of is still the wrong front door (#42). Default ON, so existing instances are unchanged;
 // the polarity is inverted from INVITE_ONLY because the safe default here is the permissive one.
 const ALLOW_GUEST = !/^(0|false|no|off)$/i.test(process.env.ALLOW_GUEST || '');
+// The ranking puts the profiles on this instance side by side. On by default because nothing
+// happens until somebody opts in individually, and nothing of it ever leaves the instance;
+// LEADERBOARD=0 removes the routes and the setting, for an operator who doesn't want it at all.
+const LEADERBOARD = !/^(0|false|no|off)$/i.test(process.env.LEADERBOARD || '');
 // Name-and-password sign-in next to passkeys (#118). Off by default: it adds a second way into
 // every account that opts in, so an instance has to ask for it. While it is off every password
 // route answers 404 and the app shows none of it; hashes already stored stay where they are.
@@ -1012,7 +1017,7 @@ function loginTarget(body) {
 }
 const acctKey = u => 'acct:' + u.id;
 const passkeyCount = u => db.creds.filter(c => c.userId === u.id).length;
-const publicUser = u => ({ id: u.id, name: u.name, admin: isAdmin(u) });
+const publicUser = u => ({ id: u.id, name: u.name, admin: isAdmin(u), ...(u.lb === true ? { lb: true } : {}) });
 const POLICY_ERRORS = {
   'too-short': `the password needs at least ${MIN_LENGTH} characters`,
   'too-long': `the password can have at most ${MAX_LENGTH} characters`,
@@ -1818,6 +1823,8 @@ const routes = {
       ...(PASSWORD_LOGIN ? { password_login: true } : {}),
       // Public: the sign-in screen is the first thing that reads it.
       ...(DEFAULT_LANG ? { default_lang: DEFAULT_LANG } : {}),
+      // Only when switched off: the absence is "on", like the client has always read it.
+      ...(LEADERBOARD ? {} : { leaderboard: false }),
       // Public like the two flags above: the caps are not a secret, and the absence of the
       // block is how the app knows this server does not take photos and videos at all.
       ...(MEDIA_ON ? { media: mediaConfig(MEDIA_LIMITS) } : {}),
@@ -1837,7 +1844,7 @@ const routes = {
     if (!s) return json(res, 401, { error: 'not signed in' });
     const { user } = s;
     const renew = s.bearer && s.exp - Date.now() < SESSION_DAYS * 86400000 / 2;
-    json(res, 200, { user: { id: user.id, name: user.name, admin: isAdmin(user) }, ...(renew ? { token: makeSession(user) } : {}) });
+    json(res, 200, { user: publicUser(user), ...(renew ? { token: makeSession(user) } : {}) });
   },
 
   'POST /api/register/options': async (req, res) => {
@@ -1914,7 +1921,7 @@ const routes = {
     });
     saveDb();
     audit(req, 'auth.register.ok', { user, msg: invite ? invite.code : null });
-    json(res, 200, { user: { id: user.id, name: user.name, admin: isAdmin(user) } }, { 'Set-Cookie': sessionCookie(user) });
+    json(res, 200, { user: publicUser(user) }, { 'Set-Cookie': sessionCookie(user) });
   },
 
   'POST /api/login/options': async (req, res) => {
@@ -1976,7 +1983,74 @@ const routes = {
       return json(res, 403, { error: 'this account has been disabled' });
     }
     audit(req, 'auth.login.ok', { user });
-    json(res, 200, { user: { id: user.id, name: user.name, admin: isAdmin(user) } }, { 'Set-Cookie': sessionCookie(user) });
+    json(res, 200, { user: publicUser(user) }, { 'Set-Cookie': sessionCookie(user) });
+  },
+
+  /* ---------- ranking ----------
+     Ranks the profiles on this instance against each other. Three properties hold it together:
+     nobody appears without setting u.lb themselves; only a name and the two numbers below ever
+     cross between profiles (never an exercise, a load, a body weight or a note); and the server
+     does no training arithmetic — it filters days and sums a field the workout already carried. */
+
+  // The range comes from the client, which owns the calendar (the week starts where the viewer's
+  // starts); `w.d` is already the local date somebody trained on, so no timezone question reaches
+  // this process.
+  'GET /api/leaderboard': async (req, res) => {
+    if (!LEADERBOARD) return json(res, 404, { error: 'not found' });
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    const q = new URL(req.url, 'http://x').searchParams;
+    const from = q.get('from'), to = q.get('to');
+    if (!isDay(from) || !isDay(to) || from > to) return json(res, 400, { error: 'bad range' });
+
+    const participants = db.users.filter(u => u.lb === true && !u.disabled);
+    // You see the group only if you're in it. Opting out is opting out of both directions —
+    // otherwise the setting reads as "hide me" while the screen stays a window into everyone else.
+    if (user.lb !== true) return json(res, 200, { me: user.id, participants: participants.length, rows: [] });
+
+    // Through the bounded stat cache the reminder tick uses: a participant's file is parsed once
+    // per change, not once per period the viewer flips through.
+    const rows = participants.map(u => {
+      const S = readStateCached(u.id);
+      return { uid: u.id, name: u.name || '', ...rangeTotals(dailyRoll(S && { unit: S.unit, workouts: records(S.workouts) }), from, to) };
+    });
+    // Unordered on purpose: ranking and tie handling live in one tested place on the client.
+    json(res, 200, { me: user.id, participants: participants.length, rows });
+  },
+
+  // Its own route rather than a field in the synced state: two copies that meet in a merge keep
+  // whichever settings are newer, and a device holding an old copy could put somebody back on the
+  // board without them asking. A privacy flag cannot depend on which device synced last.
+  'POST /api/leaderboard/opt': async (req, res) => {
+    if (!LEADERBOARD) return json(res, 404, { error: 'not found' });
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    const body = await readBody(req);
+    if (typeof body.on !== 'boolean') return json(res, 400, { error: 'on must be a boolean' });
+    if (body.on) user.lb = true; else delete user.lb;
+    saveDb();
+    audit(req, 'auth.ranking', { user, msg: body.on ? 'joined' : 'left' });
+    json(res, 200, { lb: user.lb === true });
+  },
+
+  // The display name was set once, when the profile was made, and there was no way back to it.
+  // A list that puts people side by side is the point at which a typo there stops being private.
+  // A profile that signs in with its name (a password, or an unused reset code) keeps the rule
+  // that set it: no other such profile may hold it (nameTaken).
+  'POST /api/me/name': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    const body = await readBody(req);
+    const name = text(body.name).trim().slice(0, 40);   // same cap as registration
+    if (!name) return json(res, 400, { error: 'name required', code: 'missing' });
+    if (holdsName(user) && nameTaken(name, user.id)) {
+      return json(res, 409, { error: 'another profile already signs in with this name', code: 'name-taken' });
+    }
+    const was = user.name;
+    user.name = name;
+    saveDb();
+    audit(req, 'auth.rename', { user, msg: was + ' -> ' + name });
+    json(res, 200, { name: user.name });
   },
 
   // Reads the session purely so the sign-out can be recorded; the cookie is cleared either way.

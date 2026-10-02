@@ -52,6 +52,25 @@ export default function Settings() {
   const fileRef = useRef(null)
   const importRef = useRef(null)
   const wakeOK = wakeLockSupported()
+  const patchUser = useStore(s => s.patchUser)
+  const [lbBusy, setLbBusy] = useState(false)
+
+  // Joining the ranking is a decision about what other people can see, so it asks first; leaving
+  // is immediate, because nobody should have to confirm their way out of being listed.
+  const optLeaderboard = async on => {
+    setLbBusy(true)
+    try { const r = await api('/api/leaderboard/opt', { method: 'POST', body: JSON.stringify({ on }) }); patchUser({ lb: r.lb }); toast(on ? t('You’re in the ranking') : t('You left the ranking')) }
+    catch (e) { toast(e.message || t('Could not save')) }
+    finally { setLbBusy(false) }
+  }
+  const setLb = on => on
+    ? confirmSheet({
+        title: t('Join the ranking?'),
+        message: t('Other profiles on this server will see your name, how many days you trained and your total volume. Nothing else is shared, and you can leave at any time.'),
+        confirmText: t('Join'),
+        onConfirm: () => optLeaderboard(true),
+      })
+    : optLeaderboard(false)
 
   // Two honest choices on a unit switch (issue #22): convert the numbers, or keep them and only
   // change the label — the old behaviour, still right for someone who logged in lb all along
@@ -325,6 +344,18 @@ export default function Settings() {
       </>}
     </Section>}
     {!user && !DEMO && !MOBILE && <p className="sect-f" style={{ marginTop: -18, marginBottom: 22 }}>{t('Guest mode — data lives only in this browser.')}</p>}
+
+    {/* ---------- ranking (server profiles only; the instance can switch it off entirely) ---------- */}
+    {user && !DEMO && config?.leaderboard !== false && (
+      <Section title={t('Ranking')} footer={t('Only your name, how many days you trained and your total volume are shared — never your exercises, your loads, your weight or your notes.')}>
+        <Row icon="trophy" iconTint="var(--orange)" title={t('Join the ranking')} subtitle={t('Compare check-ins and volume with the other profiles on this server.')}>
+          <Switch checked={user.lb === true} disabled={lbBusy} onChange={setLb} aria-label={t('Join the ranking')} />
+        </Row>
+        {user.lb === true && <Row icon="chart" iconTint="var(--acc)" title={t('Ranking')} accessory="chevron" onClick={() => nav('/ranking')} />}
+        <Row icon="person" iconTint="var(--blue)" title={t('Display name')} value={user.name} accessory="chevron"
+          onClick={() => useUI.getState().openSheet(close => <RenameSheet close={close} name={user.name} pwOn={pwOn} onSaved={name => patchUser({ name })} />)} />
+      </Section>
+    )}
 
     {/* ---------- the Coach on a phone: through the paired server, or with the user's own key ---------- */}
     {MOBILE && <Section title={t('AI Coach')}>
@@ -887,6 +918,32 @@ function AccountIdRow({ id }) {
 // Lets the mobile app's "connect to my server" mode (lib/remote.js) authenticate without a
 // WebAuthn ceremony of its own — the code is minted here, from an already signed-in session,
 // and redeemed by the app for a bearer token. See /api/pair/create in api/server.js.
+// The display name was typed once, when the profile was made, and never surfaced again — which
+// only became a problem when a screen started putting names side by side.
+function RenameSheet({ close, name, pwOn, onSaved }) {
+  const [v, setV] = useState(name || '')
+  const [busy, setBusy] = useState(false)
+  const toast = useUI(s => s.toast)
+  const save = async () => {
+    const n = v.trim()
+    if (!n) { toast(t('Enter a name')); return }
+    setBusy(true)
+    try { const r = await api('/api/me/name', { method: 'POST', body: JSON.stringify({ name: n }) }); onSaved(r.name); close(); toast(t('Name updated')) }
+    catch (e) { toast(e.code === 'name-taken' ? t('Another profile already signs in with this name.') : (e.message || t('Could not save the name'))) }
+    finally { setBusy(false) }
+  }
+  return <>
+    <h3>{t('Display name')}</h3>
+    <div className="muted small" style={{ marginBottom: 14 }}>
+      {t('This is the name other profiles on this server see in the ranking.')}
+      {pwOn && <> {t('With password sign-in, this is also the name you sign in with.')}</>}
+    </div>
+    <TextField value={v} onChange={e => setV(e.target.value)} maxLength={40} placeholder={t('Your name')} />
+    <div style={{ height: 12 }} />
+    <Button variant="primary" onClick={save} disabled={busy}>{busy ? t('Saving…') : t('Save')}</Button>
+  </>
+}
+
 function PairSheet({ close }) {
   const [code, setCode] = useState(null)
   const [err, setErr] = useState(null)

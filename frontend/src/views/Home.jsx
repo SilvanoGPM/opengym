@@ -190,5 +190,22 @@ export default function Home() {
         <Icon name="calendar" className="chev" style={{ fontSize: 20 }} />
       </div>
     </div>
+
+    {/* Only for profiles that joined — the ranking has no entrance for people who opted out,
+        the same way the server sends them no rows. */}
+    {user?.lb === true && (
+      <div className="card tappable" style={{ cursor: 'pointer' }} {...tappable(() => nav('/ranking'))}>
+        <div className="row between">
+          <div className="row" style={{ gap: 9 }}>
+            <span className="lrow-i" style={{ background: 'var(--orange)' }}><Icon name="trophy" /></span>
+            <div>
+              <div style={{ fontWeight: 600 }}>{t('Ranking')}</div>
+              <div className="muted small" style={{ marginTop: 2 }}>{t('How you compare with the other profiles here.')}</div>
+            </div>
+          </div>
+          <Icon name="chevronRight" className="chev" />
+        </div>
+      </div>
+    )}
   </div>
 }
